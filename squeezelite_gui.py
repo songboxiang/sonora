@@ -50,7 +50,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -887,6 +887,17 @@ def changelog(kind, log=None, cfg=None):
                 log("  ! 更新日志源不可用 %s (%s)" % (u, str(e)[:70]))
     return [], ""
 
+def lms_auth_headers(cfg):
+    """LMS 启用密码保护时返回 Basic Auth 头；用户名可为空（仅设密码的情形）。"""
+    user = (cfg.get("lms_user") or "").strip()
+    passwd = cfg.get("lms_pass") or ""
+    if not (user or passwd):
+        return {}
+    import base64
+    tok = base64.b64encode(("%s:%s" % (user, passwd)).encode("utf-8")).decode("ascii")
+    return {"Authorization": "Basic " + tok}
+
+
 def lms_current(cfg, log=None):
     host = (cfg.get("lms_host") or "").strip()
     port = (cfg.get("lms_port") or "9000").strip()
@@ -896,12 +907,12 @@ def lms_current(cfg, log=None):
     if not re.search(r":\d+(?:/|$)", base):
         base = base.rstrip("/") + ":" + port
     url = base.rstrip("/") + "/jsonrpc.js"
+    hdr = {"Content-Type": "application/json"}
+    hdr.update(lms_auth_headers(cfg))
     payload = json.dumps({"id": 1, "method": "slim.request",
                           "params": [0, ["version", "?"]]}).encode("utf-8")
     try:
-        raw = http_request(url, data=payload,
-                           headers={"Content-Type": "application/json"},
-                           timeout=8, log=log)
+        raw = http_request(url, data=payload, headers=hdr, timeout=8, log=log)
         d = json.loads(raw.decode("utf-8", "replace"))
         res = d.get("result", {}) or {}
         v = res.get("_version") or res.get("version")
@@ -913,15 +924,17 @@ def lms_current(cfg, log=None):
         try:
             p2 = json.dumps({"id": 2, "method": "slim.request",
                              "params": ["", ["serverstatus", 0, 1]]}).encode("utf-8")
-            d = json.loads(http_request(url, data=p2,
-                                        headers={"Content-Type": "application/json"},
+            d = json.loads(http_request(url, data=p2, headers=hdr,
                                         timeout=8).decode("utf-8", "replace"))
             v = (d.get("result", {}) or {}).get("version")
             if v:
                 return {"ok": True, "version": str(v), "url": url, "raw": d.get("result", {})}
         except Exception:
             pass
-        return {"ok": False, "error": str(e)[:150], "url": url}
+        msg = str(e)
+        if "401" in msg or "Unauthorized" in msg:
+            msg = "LMS 需要密码（HTTP 401），请在「升级与更新」页填写用户名/密码"
+        return {"ok": False, "error": msg[:150], "url": url}
 
 # ---------------------------------------------------------------- Now Playing / LMS JSON-RPC
 def lms_base(cfg):
@@ -939,12 +952,7 @@ def lms_rpc(cfg, cmd, playerid="", timeout=6, _id=1):
     payload = json.dumps({"id": _id, "method": "slim.request",
                           "params": [playerid or "", list(cmd)]}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    user = (cfg.get("lms_user") or "").strip()
-    if user:
-        import base64
-        tok = base64.b64encode(("%s:%s" % (user, cfg.get("lms_pass") or ""))
-                               .encode("utf-8")).decode("ascii")
-        headers["Authorization"] = "Basic " + tok
+    headers.update(lms_auth_headers(cfg))
     raw = http_request(url, data=payload, headers=headers, timeout=timeout)
     d = json.loads(raw.decode("utf-8", "replace"))
     if "error" in d:
@@ -2227,6 +2235,19 @@ class App(tk.Tk):
         for v in (self.lms_host_var, self.lms_port_var):
             v.trace_add("write", lambda *a: self._on_lms_change())
 
+        la = ttk.Frame(lm); la.pack(fill="x", pady=(6, 0))
+        ttk.Label(la, text="用户名", width=12).pack(side="left")
+        self.lms_user_var = tk.StringVar(value=self.cfg.get("lms_user", "") or "")
+        ttk.Entry(la, textvariable=self.lms_user_var, width=18).pack(side="left")
+        ttk.Label(la, text="密码").pack(side="left", padx=(10, 2))
+        self.lms_pass_var = tk.StringVar(value=self.cfg.get("lms_pass", "") or "")
+        ttk.Entry(la, textvariable=self.lms_pass_var, width=18,
+                  show="*").pack(side="left")
+        ttk.Label(la, text="LMS 启用密码保护时填写；仅设密码则用户名留空",
+                  style="Hint.TLabel").pack(side="left", padx=(10, 2))
+        for v in (self.lms_user_var, self.lms_pass_var):
+            v.trace_add("write", lambda *a: self._on_lms_change())
+
         l2 = ttk.Frame(lm); l2.pack(fill="x", pady=7)
         self.lms_cur_lbl = ttk.Label(l2, text="服务端当前版本：未检查", width=42, anchor="w")
         self.lms_cur_lbl.pack(side="left")
@@ -2500,6 +2521,9 @@ class App(tk.Tk):
     def _on_lms_change(self):
         self.cfg["lms_host"] = self.lms_host_var.get().strip()
         self.cfg["lms_port"] = self.lms_port_var.get().strip() or "9000"
+        if hasattr(self, "lms_user_var"):
+            self.cfg["lms_user"] = self.lms_user_var.get().strip()
+            self.cfg["lms_pass"] = self.lms_pass_var.get()
         self._refresh_preview()
 
     def _test_lms(self):
@@ -2716,6 +2740,9 @@ class App(tk.Tk):
         self.cfg["extra"] = self.extra_text.get("1.0", "end").strip()
         self.cfg["lms_host"] = self.lms_host_var.get().strip()
         self.cfg["lms_port"] = self.lms_port_var.get().strip() or "9000"
+        if hasattr(self, "lms_user_var"):
+            self.cfg["lms_user"] = self.lms_user_var.get().strip()
+            self.cfg["lms_pass"] = self.lms_pass_var.get()
         self.cfg["binary"] = self.binpath_var.get().strip()
         if save_config(self.cfg):
             self.status_var.set("配置已保存")
@@ -2916,7 +2943,13 @@ class App(tk.Tk):
             try:
                 url = np_cover_url(cfg, coverid, artwork_url)
                 if url:
-                    data = http_request(url, timeout=8)
+                    ch = {}
+                    try:
+                        if url.startswith(lms_base(cfg)):
+                            ch = lms_auth_headers(cfg)
+                    except Exception:
+                        pass
+                    data = http_request(url, headers=ch or None, timeout=8)
                     png = decode_cover_png(data)
                     self.q.put(("np_cover", {"key": key, "url": url, "png": png}))
             except Exception:
@@ -2961,12 +2994,16 @@ class App(tk.Tk):
 
     def _np_on_error(self, msg):
         self._np_fail += 1
+        is_auth = ("401" in msg) or ("Unauthorized" in msg)
         try:
-            self.np_state_lbl.configure(text="● 连接失败")
+            self.np_state_lbl.configure(
+                text="● LMS 需要密码" if is_auth else "● 连接失败")
         except Exception:
             pass
         if self._np_fail in (1, 2) or self._np_fail % 15 == 0:
             self._log("Now Playing: %s" % msg)
+            if is_auth:
+                self._log("  → LMS 启用了密码保护，请在「升级与更新」页填写用户名/密码，再点「刷新播放器」")
 
     def _np_refresh_players(self, force=False):
         if not (self.cfg.get("lms_host") or "").strip():
@@ -3145,6 +3182,8 @@ HELP_TEXT = """Squeezelite GUI · 使用说明
 
 【正在播放】（v1.2.0）
   先在「升级与更新」页填好 LMS 服务器地址，本页会自动列出播放器并跟随其状态。
+  若 LMS 启用了密码保护（Basic Auth），还需在同一页填写用户名/密码；
+  仅设置密码时用户名可留空。凭据保存在本地配置中，文件权限 600。
   曲目信息、专辑封面、歌词全部来自 LMS 服务端（songinfo tags:w），
   不依赖本机音乐目录或任何挂载点；带时间轴的 LRC 会随播放进度逐行高亮。
   若 LMS 设置了密码，可在配置文件的 lms_user / lms_pass 中填写（可选）。
