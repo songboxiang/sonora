@@ -3,6 +3,20 @@
 本项目遵循语义化版本：发布时同步更新 `squeezelite_gui.py` 中的 `VERSION`
 常量，并打附注标签 `vX.Y.Z`。
 
+## v1.1.0 (2026-11-21)
+
+- 界面重做为 **Lyrion Material Skin** 风格：亮 / 暗双主题（顶栏一键切换，
+  偏好写入 `~/.squeezelite_gui/config.json`）；Material 顶栏、主色标签页、
+  卡片式分组、统一按钮 / 输入框 / 滚动条 / Treeview / 文本框配色。
+  色值取自官方 `lyrion.css` / `light.css` / `dark-lyrion.css`。
+- 修复参数配置页**只能用滚动条拖拽翻页**：新增跨平台滚轮支持
+  （macOS/Windows `<MouseWheel>`、X11 `<Button-4>/<Button-5>`），递归绑定到
+  参数区 255 个控件，并固定 40px 滚动步长；设备表与版本表同样支持滚轮。
+- 新增**原创应用图标**：`assets/logo.svg`、`assets/logo-1024.png`、
+  `assets/app.icns`（7 种尺寸），由 `assets/make_icon.py` 生成；
+  `build_app.sh` 默认捆绑该图标，彻底移除对 Apple 系统图标的复制。
+- 全部硬编码颜色改为主题变量，切换主题时 ttk 与 tk 原生控件同步刷新。
+
 ## v1.0.1 (2026-11-21)
 
 - 修复 macOS 系统自带 Tk 8.5 导致的窗口内容全白：构建产物改用内置

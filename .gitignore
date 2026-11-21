@@ -6,6 +6,8 @@ Squeezelite
 squeezelite
 python/
 *.icns
+# 本项目原创 logo（非 Apple 系统资源），允许入库
+!assets/app.icns
 *.pyc
 __pycache__/
 *.bak-*

@@ -47,7 +47,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -58,6 +58,38 @@ BACKUP_DIR = os.path.join(CONFIG_DIR, "backups")
 LAUNCH_AGENT = os.path.expanduser("~/Library/LaunchAgents/com.squeezelite.gui.plist")
 
 IS_MAC = (sys.platform == "darwin")
+
+# ---------------------------------------------------------------------------
+# Lyrion Material Skin 配色（取自官方 lms-material 仓库，MIT）:
+#   css/colors/lyrion.css        --primary-color #589e81 / --accent-color #6cac92
+#   css/themes/light.css         --std-background-color #fafafa
+#   css/themes/dark-lyrion.css   --std-background-color #081f22 / popup #0d292d
+# 本项目仅借用其配色与 Material 视觉语言；GUI 代码、图标均为原创。
+# ---------------------------------------------------------------------------
+THEMES = {
+    "light": {
+        "primary": "#589e81", "primary_dark": "#3f7a61", "on_primary": "#ffffff",
+        "app_bar": "#589e81", "on_app_bar": "#ffffff", "accent": "#6cac92",
+        "bg": "#fafafa", "surface": "#ffffff", "surface2": "#f1f5f3",
+        "border": "#dfe6e3", "divider": "#e8eeeb",
+        "text": "#1f2926", "text2": "#5f6b67", "text3": "#8a9792",
+        "link": "#0a5ca8", "ok": "#2e7d5b", "warn": "#9a6410", "err": "#c0392b",
+        "sel": "#dcefe7", "sel_text": "#12352a", "row_alt": "#f4f8f6",
+        "scroll": "#c2cdc9", "scroll_active": "#589e81",
+        "terminal_bg": "#12211f", "terminal_fg": "#dceae5", "code_bg": "#f1f5f3",
+    },
+    "dark": {
+        "primary": "#589e81", "primary_dark": "#6cac92", "on_primary": "#ffffff",
+        "app_bar": "#0d292d", "on_app_bar": "#e3fdc4", "accent": "#e3fdc4",
+        "bg": "#081f22", "surface": "#0d292d", "surface2": "#123338",
+        "border": "#20454a", "divider": "#1a3b3f",
+        "text": "#e6f0ec", "text2": "#9fb4ae", "text3": "#78918a",
+        "link": "#8fd0b4", "ok": "#8fd6ae", "warn": "#e0be6a", "err": "#ef8f80",
+        "sel": "#1d4d47", "sel_text": "#e3fdc4", "row_alt": "#103035",
+        "scroll": "#2b5054", "scroll_active": "#6cac92",
+        "terminal_bg": "#06171a", "terminal_fg": "#d5e8e1", "code_bg": "#0d292d",
+    },
+}
 
 # ---------------------------------------------------------------- 数据源
 SOURCES = {
@@ -1105,6 +1137,10 @@ class App(tk.Tk):
         self.param_widgets = {}
         self.vars = {}
         self.cache = load_cache()
+        self.theme_name = self.cfg.get("theme", "light")
+        if self.theme_name not in THEMES:
+            self.theme_name = "light"
+        self._terminal_texts = []
         self.title("%s  v%s" % (APP_NAME, VERSION))
         self.geometry("1200x820")
         self.minsize(1020, 680)
@@ -1156,8 +1192,144 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    # ------------------------------------------------------------ 主题
+    def _toggle_theme(self):
+        self.theme_name = "dark" if self.theme_name == "light" else "light"
+        self.cfg["theme"] = self.theme_name
+        try:
+            save_config(self.cfg)
+        except Exception:
+            pass
+        self._init_style()
+        self._retheme_tk(self)
+        self._refresh_tree_tags()
+        try:
+            C = self.C
+            self.theme_btn.configure(
+                text="切换浅色" if self.theme_name == "dark" else "切换深色",
+                background=C["app_bar"], foreground=C["on_app_bar"],
+                activebackground=C["primary_dark"],
+                activeforeground=C["on_app_bar"])
+        except Exception:
+            pass
+        self._log("界面主题：%s（Lyrion Material）" % (
+            "深色" if self.theme_name == "dark" else "浅色"))
+
+    def _text_opts(self, terminal=False):
+        C = self.C
+        bg = C["terminal_bg"] if terminal else C["code_bg"]
+        fg = C["terminal_fg"] if terminal else C["text"]
+        return dict(background=bg, foreground=fg, insertbackground=fg,
+                    selectbackground=C["sel"], selectforeground=C["sel_text"],
+                    highlightthickness=1, highlightbackground=C["border"],
+                    highlightcolor=C["primary"], relief="flat", borderwidth=0,
+                    padx=9, pady=7)
+
+    def _refresh_tree_tags(self):
+        C = self.C
+        for t in (getattr(self, "dev_tree", None), getattr(self, "lms_tree", None)):
+            if t is None:
+                continue
+            try:
+                t.tag_configure("odd", background=C["row_alt"],
+                                foreground=C["text"])
+                t.tag_configure("chosen", background=C["sel"],
+                                foreground=C["sel_text"])
+            except Exception:
+                pass
+
+    def _retheme_tk(self, w):
+        # ttk 控件由 Style 自动更新，这里只刷新 tk 原生控件。
+        C = self.C
+        app_bar = getattr(self, "app_bar", None)
+        try:
+            cls = w.winfo_class()
+            if cls == "Frame":
+                w.configure(background=C["app_bar"] if w is app_bar else C["bg"])
+            elif cls == "Label":
+                bar = (w.master is app_bar)
+                w.configure(background=C["app_bar"] if bar else C["bg"],
+                            foreground=C["on_app_bar"] if bar else C["text"])
+            elif cls == "Button":
+                bar = (w.master is app_bar)
+                w.configure(background=C["app_bar"] if bar else C["surface"],
+                            foreground=C["on_app_bar"] if bar else C["text"],
+                            activebackground=C["primary_dark"],
+                            activeforeground=C["on_app_bar"],
+                            relief="flat", bd=0)
+            elif cls == "Text":
+                term = w in getattr(self, "_terminal_texts", ())
+                for k, v in self._text_opts(term).items():
+                    try:
+                        w.configure(**{k: v})
+                    except Exception:
+                        pass
+            elif cls == "Canvas":
+                w.configure(background=C["bg"], highlightthickness=0)
+            elif cls == "Toplevel":
+                w.configure(background=C["bg"])
+            elif cls in ("Entry", "Listbox", "Scrollbar"):
+                w.configure(background=C["surface"], foreground=C["text"],
+                            highlightbackground=C["border"])
+        except Exception:
+            pass
+        try:
+            children = w.winfo_children()
+        except Exception:
+            return
+        for ch in children:
+            self._retheme_tk(ch)
+
+    # ------------------------------------------------------------ 滚轮
+    def _wheel_steps(self, e, fixed=None):
+        if fixed is not None:
+            return fixed
+        d = getattr(e, "delta", 0)
+        if not d:
+            return 0
+        if IS_MAC:
+            # 传统鼠标 delta=+-1；触控板为连续小值，按 2 倍换算并限幅
+            n = max(1, min(6, abs(d) * 2))
+            return -n if d > 0 else n
+        n = max(1, min(6, abs(d) // 40))  # Windows 为 +-120
+        return -n if d > 0 else n
+
+    def _on_wheel(self, e, target, fixed=None):
+        steps = self._wheel_steps(e, fixed)
+        if steps:
+            try:
+                target.yview_scroll(steps, "units")
+            except Exception:
+                pass
+        return "break"
+
+    def _attach_wheel(self, root, target):
+        # 滚轮事件只发给鼠标下的最上层控件，因此必须递归绑定到整棵子树。
+        # macOS/Windows 用 <MouseWheel>，X11 用 <Button-4>/<Button-5>。
+        def bind_one(w):
+            try:
+                w.bind("<MouseWheel>",
+                       lambda e, t=target: self._on_wheel(e, t), add="+")
+                w.bind("<Button-4>",
+                       lambda e, t=target: self._on_wheel(e, t, -3), add="+")
+                w.bind("<Button-5>",
+                       lambda e, t=target: self._on_wheel(e, t, 3), add="+")
+            except Exception:
+                pass
+
+        def walk(w):
+            bind_one(w)
+            try:
+                kids = w.winfo_children()
+            except Exception:
+                return
+            for c in kids:
+                walk(c)
+        walk(root)
+
     # ------------------------------------------------------------ 样式
     def _init_style(self):
+        C = self.C = THEMES.get(self.theme_name, THEMES["light"])
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
@@ -1166,8 +1338,9 @@ class App(tk.Tk):
         fam = "PingFang SC"
         try:
             avail = set(tkfont.families(self))
-            for c in ("PingFang SC", "Noto Sans CJK SC", "WenQuanYi Zen Hei",
-                      "Droid Sans Fallback", "Microsoft YaHei", "Helvetica"):
+            for c in ("SF Pro Text", "Roboto", "PingFang SC", "Noto Sans CJK SC",
+                      "WenQuanYi Zen Hei", "Droid Sans Fallback",
+                      "Microsoft YaHei", "Helvetica Neue", "Helvetica"):
                 if c in avail:
                     fam = c
                     break
@@ -1177,31 +1350,140 @@ class App(tk.Tk):
         self.ui_font = (fam, 11)
         self.small_font = (fam, 9)
         self.bold_font = (fam, 11, "bold")
+        self.head_font = (fam, 10, "bold")
+        self.title_font = (fam, 14, "bold")
         self.mono_font = ("Menlo", 10) if IS_MAC else ("DejaVu Sans Mono", 10)
-        style.configure(".", font=(fam, 10))
-        style.configure("Treeview", font=self.ui_font, rowheight=28)
-        style.configure("Treeview.Heading", font=(fam, 10, "bold"), padding=(6, 8))
-        style.configure("TNotebook.Tab", font=(fam, 10))
-        style.configure("TLabelframe.Label", font=(fam, 10, "bold"))
-        style.configure("TButton", font=(fam, 10))
-        style.configure("Title.TLabel", font=(fam, 13, "bold"))
-        style.configure("Hint.TLabel", font=self.small_font, foreground="#666")
-        style.configure("Rec.TLabel", font=self.small_font, foreground="#087a55")
-        self.configure(background="#f4f6f9")
+
+        style.configure(".", background=C["bg"], foreground=C["text"],
+                        font=(fam, 10), bordercolor=C["border"],
+                        lightcolor=C["surface"], darkcolor=C["border"],
+                        troughcolor=C["surface2"], focuscolor=C["primary"])
+        style.configure("TFrame", background=C["bg"])
+        style.configure("TLabel", background=C["bg"], foreground=C["text"],
+                        font=(fam, 10), padding=1)
+        style.configure("TLabelframe", background=C["bg"],
+                        bordercolor=C["border"], lightcolor=C["bg"],
+                        darkcolor=C["border"], relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background=C["bg"],
+                        foreground=C["primary"], font=self.head_font,
+                        padding=(8, 2))
+        style.configure("TButton", background=C["surface"],
+                        foreground=C["text"], bordercolor=C["border"],
+                        lightcolor=C["surface"], darkcolor=C["border"],
+                        font=(fam, 10), padding=(11, 6), relief="flat",
+                        borderwidth=1)
+        style.map("TButton",
+                  background=[("pressed", C["sel"]), ("active", C["surface2"]),
+                              ("disabled", C["bg"])],
+                  foreground=[("disabled", C["text3"])],
+                  bordercolor=[("focus", C["primary"])])
+        style.configure("Accent.TButton", background=C["primary"],
+                        foreground=C["on_primary"], bordercolor=C["primary"],
+                        lightcolor=C["primary"], darkcolor=C["primary_dark"],
+                        font=(fam, 10, "bold"), padding=(12, 6), relief="flat")
+        style.map("Accent.TButton",
+                  background=[("pressed", C["primary_dark"]),
+                              ("active", C["primary_dark"])],
+                  foreground=[("disabled", C["text3"])])
+        style.configure("TEntry", fieldbackground=C["surface"],
+                        foreground=C["text"], insertcolor=C["text"],
+                        bordercolor=C["border"], lightcolor=C["surface"],
+                        darkcolor=C["border"], padding=5, relief="flat",
+                        borderwidth=1)
+        style.map("TEntry", bordercolor=[("focus", C["primary"])],
+                  fieldbackground=[("disabled", C["surface2"])])
+        style.configure("TCombobox", fieldbackground=C["surface"],
+                        background=C["surface"], foreground=C["text"],
+                        arrowcolor=C["text2"], bordercolor=C["border"],
+                        lightcolor=C["surface"], darkcolor=C["border"],
+                        padding=5, relief="flat", borderwidth=1)
+        style.map("TCombobox", fieldbackground=[("readonly", C["surface"])],
+                  bordercolor=[("focus", C["primary"])],
+                  foreground=[("disabled", C["text3"])])
+        self.option_add("*TCombobox*Listbox.background", C["surface"])
+        self.option_add("*TCombobox*Listbox.foreground", C["text"])
+        self.option_add("*TCombobox*Listbox.selectBackground", C["primary"])
+        self.option_add("*TCombobox*Listbox.selectForeground", C["on_primary"])
+        style.configure("TNotebook", background=C["bg"],
+                        bordercolor=C["border"], tabmargins=(8, 8, 8, 0),
+                        relief="flat")
+        style.configure("TNotebook.Tab", background=C["bg"],
+                        foreground=C["text2"], padding=(20, 10),
+                        font=self.head_font, borderwidth=0, relief="flat")
+        style.map("TNotebook.Tab",
+                  background=[("selected", C["primary"]),
+                              ("active", C["surface2"])],
+                  foreground=[("selected", C["on_primary"]),
+                              ("active", C["text"])])
+        style.configure("Treeview", background=C["surface"],
+                        fieldbackground=C["surface"], foreground=C["text"],
+                        font=self.ui_font, rowheight=30,
+                        bordercolor=C["divider"], relief="flat", borderwidth=0)
+        style.configure("Treeview.Heading", background=C["surface2"],
+                        foreground=C["text2"], font=self.head_font,
+                        padding=(8, 9), relief="flat",
+                        bordercolor=C["divider"])
+        style.map("Treeview",
+                  background=[("selected", C["sel"])],
+                  foreground=[("selected", C["sel_text"])])
+        style.configure("TScrollbar", background=C["scroll"],
+                        troughcolor=C["bg"], bordercolor=C["bg"],
+                        arrowcolor=C["text2"], gripcount=0, relief="flat")
+        style.map("TScrollbar",
+                  background=[("active", C["scroll_active"]),
+                              ("pressed", C["primary"])],
+                  arrowcolor=[("active", C["primary"])])
+        style.configure("TSeparator", background=C["divider"])
+        style.configure("TProgressbar", background=C["primary"],
+                        troughcolor=C["surface2"], bordercolor=C["surface2"],
+                        lightcolor=C["primary"], darkcolor=C["primary"],
+                        relief="flat")
+        style.configure("TCheckbutton", background=C["bg"],
+                        foreground=C["text"], font=(fam, 10),
+                        indicatorcolor=C["surface"], bordercolor=C["border"])
+        style.configure("TRadiobutton", background=C["bg"],
+                        foreground=C["text"], font=(fam, 10),
+                        indicatorcolor=C["surface"], bordercolor=C["border"])
+        style.configure("Hint.TLabel", background=C["bg"],
+                        foreground=C["text2"], font=self.small_font)
+        style.configure("Title.TLabel", background=C["bg"],
+                        foreground=C["text"], font=self.title_font)
+        style.configure("Rec.TLabel", background=C["bg"],
+                        foreground=C["ok"], font=self.small_font)
+        style.configure("AppBar.TLabel", background=C["app_bar"],
+                        foreground=C["on_app_bar"])
+        self.configure(background=C["bg"])
 
     # ------------------------------------------------------------ 主框架
     def _build_ui(self):
-        head = ttk.Frame(self, padding=(12, 8))
-        head.pack(fill="x")
-        ttk.Label(head, text="Squeezelite  ·  macOS 图形化控制台",
-                  style="Title.TLabel").pack(side="left")
-        self.platform_lbl = ttk.Label(head, text="", style="Hint.TLabel")
-        self.platform_lbl.pack(side="right")
-        self.platform_lbl.configure(text="平台: %s / %s" % (
-            "macOS" if IS_MAC else sys.platform, platform.machine()))
+        C = self.C
+        self.app_bar = tk.Frame(self, background=C["app_bar"], height=60)
+        self.app_bar.pack(fill="x")
+        self.app_bar.pack_propagate(False)
+        tk.Label(self.app_bar, text="Squeezelite", background=C["app_bar"],
+                 foreground=C["on_app_bar"], font=(self.fam, 17, "bold")
+                 ).pack(side="left", padx=(20, 8))
+        tk.Label(self.app_bar, text="LMS Material 控制台",
+                 background=C["app_bar"], foreground=C["on_app_bar"],
+                 font=(self.fam, 10)).pack(side="left")
+        self.theme_btn = tk.Button(
+            self.app_bar,
+            text="切换浅色" if self.theme_name == "dark" else "切换深色",
+            command=self._toggle_theme, relief="flat", bd=0,
+            background=C["app_bar"], foreground=C["on_app_bar"],
+            activebackground=C["primary_dark"],
+            activeforeground=C["on_app_bar"],
+            font=(self.fam, 10), padx=14, pady=4, cursor="hand2")
+        self.theme_btn.pack(side="right", padx=(6, 16))
+        self.platform_lbl = tk.Label(
+            self.app_bar, text="", background=C["app_bar"],
+            foreground=C["on_app_bar"], font=(self.fam, 9))
+        self.platform_lbl.pack(side="right", padx=6)
+        self.platform_lbl.configure(text="v%s  ·  %s / %s" % (
+            VERSION, "macOS" if IS_MAC else sys.platform, platform.machine()))
 
-        self.nb = ttk.Notebook(self, padding=6)
-        self.nb.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self.nb = ttk.Notebook(self, padding=(10, 8, 10, 4))
+        self.nb.pack(fill="both", expand=True, padx=12, pady=(10, 4))
         self.tab_devices = ttk.Frame(self.nb)
         self.tab_params = ttk.Frame(self.nb)
         self.tab_launch = ttk.Frame(self.nb)
@@ -1216,14 +1498,17 @@ class App(tk.Tk):
         self._build_tab_launch()
         self._build_tab_update()
         self._build_tab_help()
+        self._refresh_tree_tags()
 
-        foot = ttk.Frame(self, padding=(12, 6))
+        foot = ttk.Frame(self, padding=(14, 8))
         foot.pack(fill="x")
         self.status_var = tk.StringVar(value="就绪")
-        ttk.Label(foot, textvariable=self.status_var, style="Hint.TLabel").pack(side="left")
+        ttk.Label(foot, textvariable=self.status_var,
+                  style="Hint.TLabel").pack(side="left")
         self.pbar = ttk.Progressbar(foot, mode="indeterminate", length=110)
         self.pbar.pack(side="left", padx=10)
-        ttk.Button(foot, text="保存配置", command=self._save_config).pack(side="right", padx=3)
+        ttk.Button(foot, text="保存配置", style="Accent.TButton",
+                   command=self._save_config).pack(side="right", padx=3)
         ttk.Button(foot, text="退出", command=self._on_close).pack(side="right", padx=3)
         ttk.Button(foot, text="重新生成命令", command=self._refresh_preview).pack(side="right", padx=3)
 
@@ -1321,13 +1606,12 @@ class App(tk.Tk):
             self.dev_tree.heading(c, text=txt)
             self.dev_tree.column(c, width=w, minwidth=50,
                                  stretch=(c in ("name", "source")), anchor="w")
-        self.dev_tree.tag_configure("odd", background="#eef3f9")
-        self.dev_tree.tag_configure("chosen", background="#d7ecdc")
         sb = ttk.Scrollbar(top, orient="vertical", command=self.dev_tree.yview)
         self.dev_tree.configure(yscrollcommand=sb.set)
         self.dev_tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         self.dev_tree.bind("<<TreeviewSelect>>", self._on_device_select)
+        self._attach_wheel(self.dev_tree, self.dev_tree)
 
         hint = ttk.Label(top, text="提示：找不到设备时，请先安装/指定 squeezelite；macOS 会同时用 "
                                    "system_profiler SPAudioDataType 补充枚举。也可手动添加 -o 设备名。",
@@ -1355,7 +1639,7 @@ class App(tk.Tk):
                   style="Hint.TLabel").grid(row=2, column=2, sticky="w", padx=8)
         ttk.Label(rows, text="LMS 显示名", width=14, style="Title.TLabel").grid(row=3, column=0, sticky="w", pady=(10, 3))
         ttk.Label(rows, textvariable=self.name_var, style="Title.TLabel",
-                  foreground="#0a5ca8").grid(row=3, column=1, columnspan=2, sticky="w", pady=(10, 3))
+                  foreground=self.C["link"]).grid(row=3, column=1, columnspan=2, sticky="w", pady=(10, 3))
         ttk.Button(rows, text="刷新名称并写入 -n", command=self._update_name).grid(row=4, column=1, sticky="w", pady=4)
 
         for v in (self.host_var, self.tpl_var, self.short_var):
@@ -1368,6 +1652,7 @@ class App(tk.Tk):
         bar = ttk.LabelFrame(f, text=" 参数预设 ", padding=8)
         bar.pack(fill="x", padx=10, pady=8)
         ttk.Button(bar, text="★ 一键应用最优音质方案 (bit-perfect)",
+                   style="Accent.TButton",
                    command=self._apply_best).pack(side="left", padx=4)
         ttk.Button(bar, text="恢复默认值", command=self._restore_defaults).pack(side="left", padx=4)
         ttk.Button(bar, text="查看全部参数说明", command=self._show_all_params).pack(side="left", padx=4)
@@ -1377,13 +1662,13 @@ class App(tk.Tk):
 
         area = ttk.Frame(f)
         area.pack(fill="both", expand=True, padx=10, pady=(0, 6))
-        canvas = tk.Canvas(area, highlightthickness=0, background="#f4f6f9")
+        canvas = tk.Canvas(area, highlightthickness=0, background=self.C["bg"])
         sb = ttk.Scrollbar(area, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         win = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
-        canvas.configure(yscrollcommand=sb.set)
+        canvas.configure(yscrollcommand=sb.set, yscrollincrement=40)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
@@ -1393,17 +1678,22 @@ class App(tk.Tk):
             for p in [x for x in PARAMS if x["group"] == gname]:
                 self._make_param_row(gf, p)
 
+        # 滚轮绑定到参数区整棵控件树（否则事件只发给鼠标下的子控件）
+        self.param_canvas = canvas
+        self._attach_wheel(area, canvas)
+
         bottom = ttk.LabelFrame(f, text=" 自定义附加参数与命令预览 ", padding=8)
         bottom.pack(fill="x", padx=10, pady=(0, 8))
         ttk.Label(bottom, text="附加 CLI 参数（直接追加，如 -d output=debug -r 44100-192000:500）：",
                   style="Hint.TLabel").pack(anchor="w")
-        self.extra_text = tk.Text(bottom, height=2, font=self.mono_font, wrap="word")
+        self.extra_text = tk.Text(bottom, height=2, font=self.mono_font, wrap="word",
+                                  **self._text_opts(False))
         self.extra_text.pack(fill="x", pady=(2, 6))
         self.extra_text.insert("1.0", self.cfg.get("extra", "") or "")
         self.extra_text.bind("<KeyRelease>", lambda e: self._on_extra_change())
         ttk.Label(bottom, text="生成的命令：", style="Hint.TLabel").pack(anchor="w")
         self.mini_cmd = tk.Text(bottom, height=3, font=self.mono_font, wrap="word",
-                                background="#f7f9fc")
+                                **self._text_opts(False))
         self.mini_cmd.pack(fill="x")
         self.mini_cmd.configure(state="disabled")
         self.validate_lbl = ttk.Label(bottom, text="", style="Hint.TLabel")
@@ -1479,20 +1769,22 @@ class App(tk.Tk):
         ok, msg = validate_param(p, v)
         hit = next((o for o in p["options"] if o[0] == v), None)
         if not ok:
-            txt, color = "⚠ " + msg, "#c0392b"
+            txt, color = "⚠ " + msg, self.C["err"]
         elif hit:
-            txt, color = "效果：" + hit[2], "#444"
+            txt, color = "效果：" + hit[2], self.C["text2"]
         elif v:
-            txt, color = "自定义值 · 合法范围：" + p["range"], "#7a5b00"
+            txt, color = "自定义值 · 合法范围：" + p["range"], self.C["warn"]
         else:
-            txt, color = "当前：不设置（使用 squeezelite 默认值） · 合法范围：" + p["range"], "#888"
+            txt, color = "当前：不设置（使用 squeezelite 默认值） · 合法范围：" + p["range"], self.C["text3"]
         w["effect"].configure(text=txt, foreground=color)
 
     def _show_param_detail(self, p):
         top = tk.Toplevel(self)
+        top.configure(background=self.C["bg"])
         top.title("%s  %s" % (p["name"], p["flag"]))
         top.geometry("760x520")
-        txt = scrolledtext.ScrolledText(top, wrap="word", font=self.ui_font, padx=12, pady=10)
+        txt = scrolledtext.ScrolledText(top, wrap="word", font=self.ui_font,
+                                     **self._text_opts(False))
         txt.pack(fill="both", expand=True)
         s = []
         s.append("参数：%s   开关：%s" % (p["name"], p["flag"]))
@@ -1518,9 +1810,11 @@ class App(tk.Tk):
 
     def _show_all_params(self):
         top = tk.Toplevel(self)
+        top.configure(background=self.C["bg"])
         top.title("Squeezelite 全部参数说明（依据官方 manpage 2025-10-10）")
         top.geometry("900x640")
-        txt = scrolledtext.ScrolledText(top, wrap="word", font=self.ui_font, padx=12, pady=10)
+        txt = scrolledtext.ScrolledText(top, wrap="word", font=self.ui_font,
+                                     **self._text_opts(False))
         txt.pack(fill="both", expand=True)
         out = ["Squeezelite 官方参数手册（本工具内置 %d 项）\n" % len(PARAMS), "=" * 70, ""]
         for p in PARAMS:
@@ -1576,9 +1870,9 @@ class App(tk.Tk):
         problems = validate_all(self.values, self.cfg.get("extra", ""))
         if problems:
             messagebox.showwarning("参数校验未通过", "\n\n".join(problems))
-            self.validate_lbl.configure(text="⚠ 发现 %d 处问题" % len(problems), foreground="#c0392b")
+            self.validate_lbl.configure(text="⚠ 发现 %d 处问题" % len(problems), foreground=self.C["err"])
         else:
-            self.validate_lbl.configure(text="✓ 全部参数取值合法", foreground="#087a55")
+            self.validate_lbl.configure(text="✓ 全部参数取值合法", foreground=self.C["ok"])
             messagebox.showinfo("校验通过", "全部参数与自定义附加参数取值合法。")
 
     # ------------------------------------------------------------ Tab3 启动控制
@@ -1587,7 +1881,7 @@ class App(tk.Tk):
         top = ttk.LabelFrame(f, text=" 完整启动命令（可直接复制） ", padding=8)
         top.pack(fill="x", padx=10, pady=8)
         self.cmd_text = tk.Text(top, height=4, font=self.mono_font, wrap="word",
-                                background="#f7f9fc")
+                                **self._text_opts(False))
         self.cmd_text.pack(fill="x")
         bar = ttk.Frame(top)
         bar.pack(fill="x", pady=6)
@@ -1605,8 +1899,8 @@ class App(tk.Tk):
         logf = ttk.LabelFrame(f, text=" 运行日志（squeezelite stdout / stderr） ", padding=8)
         logf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.proc_text = scrolledtext.ScrolledText(logf, wrap="word", font=self.mono_font,
-                                                   background="#10151c", foreground="#d6e2ee",
-                                                   insertbackground="white")
+                                                   **self._text_opts(True))
+        self._terminal_texts.append(self.proc_text)
         self.proc_text.pack(fill="both", expand=True)
 
     # ------------------------------------------------------------ Tab4 升级与更新
@@ -1645,7 +1939,7 @@ class App(tk.Tk):
         self.sl_src_lbl = ttk.Label(r3, text="", style="Hint.TLabel")
         self.sl_src_lbl.pack(side="left", padx=10)
         self.sl_changelog = tk.Text(sl, height=6, font=self.small_font, wrap="word",
-                                    background="#f7f9fc")
+                                    **self._text_opts(False))
         self.sl_changelog.pack(fill="both", expand=True, pady=(6, 0))
         self.sl_changelog.insert("1.0", "点击「检查更新」后，这里显示官方提交日志（升级内容）。")
         self.sl_changelog.configure(state="disabled")
@@ -1682,12 +1976,12 @@ class App(tk.Tk):
             self.lms_tree.heading(c, text=txt)
             self.lms_tree.column(c, width=w, minwidth=60, anchor="w",
                                  stretch=(c == "url"))
-        self.lms_tree.tag_configure("odd", background="#eef3f9")
         self.lms_tree.pack(side="left", fill="both", expand=True)
+        self._attach_wheel(self.lms_tree, self.lms_tree)
         ttk.Button(l3, text="检查更新", command=self._check_updates).pack(side="top", padx=4, pady=2)
         ttk.Button(l3, text="查看升级内容", command=lambda: self._show_changelog("lms")).pack(side="top", padx=4, pady=2)
         self.lms_changelog = tk.Text(lm, height=5, font=self.small_font, wrap="word",
-                                     background="#f7f9fc")
+                                     **self._text_opts(False))
         self.lms_changelog.pack(fill="both", expand=True, pady=(6, 0))
         self.lms_changelog.insert("1.0", "点击「检查更新」后，这里显示 LMS 官方提交日志（升级内容）。")
         self.lms_changelog.configure(state="disabled")
@@ -1700,11 +1994,13 @@ class App(tk.Tk):
         lf = ttk.LabelFrame(f, text=" 运行日志 ", padding=6)
         lf.pack(fill="both", expand=True, padx=10, pady=6)
         self.log_text = scrolledtext.ScrolledText(lf, wrap="word", font=self.mono_font,
-                                                  background="#10151c", foreground="#d6e2ee")
+                                                  **self._text_opts(True))
+        self._terminal_texts.append(self.log_text)
         self.log_text.pack(fill="both", expand=True)
         hf = ttk.LabelFrame(f, text=" 使用说明 / 数据源 ", padding=6)
         hf.pack(fill="both", expand=True, padx=10, pady=(0, 8))
-        t = scrolledtext.ScrolledText(hf, wrap="word", font=self.small_font)
+        t = scrolledtext.ScrolledText(hf, wrap="word", font=self.small_font,
+                                      **self._text_opts(False))
         t.pack(fill="both", expand=True)
         t.insert("1.0", HELP_TEXT)
         t.configure(state="disabled")
@@ -1836,10 +2132,10 @@ class App(tk.Tk):
             if hasattr(self, "validate_lbl"):
                 if problems:
                     self.validate_lbl.configure(text="⚠ " + "；".join(problems[:3]),
-                                                foreground="#c0392b")
+                                                foreground=self.C["err"])
                 else:
                     self.validate_lbl.configure(text="✓ 全部参数合法 · 共 %d 个参数项" % len(argv),
-                                                foreground="#087a55")
+                                                foreground=self.C["ok"])
         except Exception as e:
             self._log("刷新命令预览失败: %s" % e)
 
@@ -2011,19 +2307,19 @@ class App(tk.Tk):
     def _sl_status(self, local, latest):
         item = (latest or {}).get("latest") or {}
         if not local:
-            return "未检测到本机版本", "#b06a00"
+            return "未检测到本机版本", self.C["warn"]
         if not item.get("revision") and not item.get("version"):
-            return "无法获取最新版本（源降级）", "#b06a00"
+            return "无法获取最新版本（源降级）", self.C["warn"]
         try:
             if item.get("revision") and local.get("revision") \
                     and int(item["revision"]) > int(local["revision"]):
                 return "发现新版本 r%s（当前 r%s）" % (
-                    item["revision"], local["revision"]), "#c0392b"
+                    item["revision"], local["revision"]), self.C["err"]
         except Exception:
             pass
         if item.get("version") and ver_cmp(item["version"], local["version"]) > 0:
-            return "发现新版本 %s" % item["version"], "#c0392b"
-        return "已是最新版本", "#087a55"
+            return "发现新版本 %s" % item["version"], self.C["err"]
+        return "已是最新版本", self.C["ok"]
 
     def _fill_lms(self, d):
         self.lms_data = d or {}
@@ -2035,16 +2331,16 @@ class App(tk.Tk):
         self.lms_latest_lbl.configure(text="最新正式版：%s" % (
             official["version"] if official else "未知"))
         if not chans:
-            st, color = "版本库不可用", "#b06a00"
+            st, color = "版本库不可用", self.C["warn"]
         elif not cur.get("ok"):
-            st, color = "请填写 LMS 地址后检查", "#b06a00"
+            st, color = "请填写 LMS 地址后检查", self.C["warn"]
         elif official and ver_cmp(official["version"], cur["version"]) > 0:
             st, color = "★ 服务端有更新 %s → %s" % (
-                cur["version"], official["version"]), "#c0392b"
+                cur["version"], official["version"]), self.C["err"]
             self._log("★ LMS 服务端有更新: %s → %s（%s）" % (
                 cur["version"], official["version"], official.get("url", "")))
         else:
-            st, color = "已是最新正式版", "#087a55"
+            st, color = "已是最新正式版", self.C["ok"]
         self.lms_status_lbl.configure(text="状态：" + st, foreground=color)
         self.lms_tree.delete(*self.lms_tree.get_children())
         for i, c in enumerate(chans):
@@ -2077,9 +2373,11 @@ class App(tk.Tk):
         src = (d or {}).get("cl_source") or "未检查"
         title = ("Squeezelite 升级内容" if kind == "sl" else "LMS 服务端升级内容")
         top = tk.Toplevel(self)
+        top.configure(background=self.C["bg"])
         top.title(title)
         top.geometry("860x520")
-        t = scrolledtext.ScrolledText(top, wrap="word", font=self.ui_font, padx=12, pady=10)
+        t = scrolledtext.ScrolledText(top, wrap="word", font=self.ui_font,
+                                     **self._text_opts(False))
         t.pack(fill="both", expand=True)
         t.insert("1.0", "%s\n来源：%s\n共 %d 条\n\n" % (title, src, len(items)))
         for c in items:
@@ -2170,6 +2468,9 @@ class App(tk.Tk):
 
 
 HELP_TEXT = """Squeezelite GUI · 使用说明
+界面：顶栏可一键切换亮色 / 深色（Lyrion Material 风格）；
+参数配置页、设备列表、版本列表均支持鼠标滚轮上下滚动。
+
 ================================================================================
 
 【快速开始】

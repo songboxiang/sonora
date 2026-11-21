@@ -7,7 +7,7 @@
 #    - 独立 Python 3.13 运行时（含 Tcl/Tk 9，不依赖系统 /usr/bin/python3）
 #    - squeezelite_gui.py（完整图形界面）
 #    - squeezelite（本机已有的 arm64 可执行文件）
-#    - launcher + Info.plist + 应用图标
+#    - launcher + Info.plist + 原创 logo 图标（assets/app.icns）
 #  全程零联网、零第三方依赖；双击即用。
 # ==========================================================================
 set -euo pipefail
@@ -71,17 +71,21 @@ cp "$GUI_PY" "$RES/squeezelite_gui.py"
 cp "$SL_BIN" "$RES/squeezelite"
 chmod +x "$RES/squeezelite"
 
-# ---------- 3. 应用图标（可选，必须是自有/原创图标）----------
-# macOS 系统自带图标位于 CoreTypes.bundle，属 Apple 所有，仅授权在本机
-# 使用，不可随应用再分发。这里不从系统复制；如自备原创 app.icns 放在
-# SRC_DIR 下，构建时会自动带上（不提供则使用 macOS 默认应用图标）。
+# ---------- 3. 应用图标（本项目原创 Lyrion Material 风格 logo）----------
+# assets/app.icns 由 assets/make_icon.py 生成（SVG 源 + 多尺寸 PNG 打包），
+# 为本项目原创，可随应用分发。macOS CoreTypes.bundle 内的系统图标属 Apple
+# 所有，仅授权本机使用，本脚本绝不复制。
 ICON_KEY=""
-if [ -f "$SRC_DIR/app.icns" ]; then
-  cp "$SRC_DIR/app.icns" "$RES/app.icns"
-  ICON_KEY='    <key>CFBundleIconFile</key>          <string>app.icns</string>'
-  echo "== 使用自备图标: $SRC_DIR/app.icns"
-else
-  echo "== 未设置图标（不捆绑任何 Apple 系统资源）"
+for cand in "$SRC_DIR/assets/app.icns" "$SRC_DIR/app.icns"; do
+  if [ -f "$cand" ]; then
+    cp "$cand" "$RES/app.icns"
+    ICON_KEY='    <key>CFBundleIconFile</key>          <string>app.icns</string>'
+    echo "== 使用原创 logo: $cand"
+    break
+  fi
+done
+if [ -z "$ICON_KEY" ]; then
+  echo "== 未找到 assets/app.icns，使用 macOS 默认应用图标（不捆绑 Apple 资源）"
 fi
 
 # ---------- 4. launcher ----------

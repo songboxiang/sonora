@@ -14,6 +14,10 @@
 - 播放器显示名 = 本机名称 + 音频设备简称（通过 `-n` 传给 LMS 服务端）
 - 联网升级 Squeezelite（SourceForge 官方 macOS 二进制 / Homebrew），
   检查 LMS 服务端版本更新并提示，标注升级内容（GitHub commit 日志）
+- **Lyrion Material 风格界面**：亮 / 暗双主题（顶栏一键切换），配色取自
+  LMS Material Skin 官方 Lyrion 色板；参数页支持鼠标滚轮滚动
+- **原创应用图标**：`assets/logo.svg` + `assets/app.icns`（Material 圆角方形 +
+  浮动操作按钮 + 声波弧线），非 Apple 系统资源，可随应用分发
 - 配置保存在 `~/.squeezelite_gui/`，升级前自动备份旧二进制
 
 ## 仓库内容（仅源码，不含任何二进制）
@@ -23,6 +27,9 @@
 | `squeezelite_gui.py` | GUI 主程序，tkinter 单文件、仅 Python 标准库 |
 | `build_app.sh` | macOS 一键封装脚本，生成自包含 `.app` |
 | `Squeezelite-GUI.command` | macOS 双击启动脚本 |
+| `assets/logo.svg` | 原创图标矢量源（Lyrion Material 风格） |
+| `assets/app.icns` | 由 `assets/make_icon.py` 生成的 macOS 应用图标 |
+| `assets/make_icon.py` | 图标生成脚本（仅设计阶段需要 Pillow） |
 | `LICENSE` | 原创代码许可（MIT） |
 | `THIRD_PARTY_NOTICES.md` | 第三方组件许可与分发义务 |
 
@@ -43,8 +50,9 @@ SL_BIN=/path/to/squeezelite bash build_app.sh
 
 脚本生成 `~/Applications/Squeezelite GUI.app`，内置 Python/Tk 运行时、
 GUI 与 squeezelite，双击即用。旧同名应用会被改名隔离备份而非删除。
-可选：在仓库目录放一份**原创** `app.icns`，构建时自动作为应用图标
-（脚本不会从 macOS 系统目录复制任何图标）。
+默认使用仓库内 `assets/app.icns`（本项目原创 logo）。脚本不会从 macOS
+系统目录复制任何 Apple 图标；如需换图标，可替换 `assets/app.icns` 或在
+仓库根目录另放一份自备原创 `app.icns`。
 
 > 使用系统自带 `/usr/bin/python3`（Python 3.9 + Tk 8.5）会出现窗口
 > 内容全白 —— 该 Tk 已被 macOS 弃用。请改用 `.app` 内置运行时或
@@ -58,6 +66,7 @@ GUI 与 squeezelite，双击即用。旧同名应用会被改名隔离备份而�
 
 本 GUI 与 squeezelite 仅为命令行调用关系（mere aggregation），因此
 原创代码可以选择 MIT；若您希望与上游保持一致，也可改用 GPLv3。
+`assets/` 下的图标、SVG 与生成脚本同样属原创代码，随 MIT 许可授予。
 
 ## 免责
 

@@ -59,14 +59,20 @@ blinker、PyYAML、pip 等（版本见各 `.dist-info/METADATA`）。许可涵�
 Apache-2.0、MIT、MPL-2.0、BSD-3-Clause、ISC 等宽松许可。分发 `.app`
 时应保留各包 `.dist-info` 内的 LICENSE / METADATA 许可声明。
 
-## 5. macOS 系统图标 —— 不得再分发
+## 5. 应用图标与 UI 配色 —— 本项目原创
 
-早期 `build_app.sh` 曾从
-`/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns`
-复制图标。macOS SLA 仅授权在 Apple 设备上使用系统资源，Apple 拥有这些
-图标的设计版权，**不得随应用复制分发**。现脚本已移除该复制：未提供
-自备原创 `app.icns` 时不设置 `CFBundleIconFile`，直接使用 macOS 默认
-应用图标。若需自定义图标，请自备原创图标文件。
+`assets/logo.svg` 与 `assets/app.icns` 是本项目原创设计的图标
+（Material 圆角方形 + 浮动操作按钮 + 声波弧线），由 `assets/make_icon.py`
+生成，随 MIT 许可一并授予，**不含任何 Apple 系统资源**。
+`make_icon.py` 仅在设计阶段需要 Pillow；最终用户只需现成的 `.icns`。
+
+早期 `build_app.sh` 曾从 macOS `CoreTypes.bundle` 复制 Apple 通用应用图标，
+该系统资源受 macOS SLA 约束、不可再分发，现已彻底移除。
+
+界面配色参考 LMS Material Skin 的官方 Lyrion 色板
+（`css/colors/lyrion.css`、`css/themes/light.css`、`css/themes/dark-lyrion.css`，
+MIT 许可）。色值属于事实性数据，本项目仅借用配色与视觉语言，未复制其
+代码、图标或文案；GUI 代码与图标均为原创。
 
 ## 6. 外部数据、文档与商标
 
