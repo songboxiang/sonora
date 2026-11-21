@@ -19,6 +19,30 @@
 - **原创应用图标**：`assets/logo.svg` + `assets/app.icns`（Material 圆角方形 +
   浮动操作按钮 + 声波弧线），非 Apple 系统资源，可随应用分发
 - 配置保存在 `~/.squeezelite_gui/`，升级前自动备份旧二进制
+- **「正在播放」看板**（v1.2.0）：自动跟随 LMS 播放器状态，显示曲目信息、
+  专辑封面与歌词；歌词由 LMS 服务端提供（`songinfo tags:w`），不依赖本地
+  音乐目录或挂载点，支持 LRC 时间轴逐行同步
+
+## 正在播放与歌词来源
+
+在「升级与更新」页填好 LMS 服务器地址后，打开「正在播放」页会自动列出
+LMS 上的播放器；选中后即开始跟随其状态。本页只读写 LMS 的 JSON-RPC 接口
+（`serverstatus` / `status` / `songinfo` / `playlist`），音频仍由 squeezelite
+通过 Slimproto 输出，两条通道互不影响 —— 因此即使未点「启动」，只要 LMS
+在线，本页也能显示其他遥控端发起的播放。
+
+歌词**完全从 LMS 端获取**：优先 `songinfo ... tags:w`（LMS 扫描曲目时入库的
+内嵌歌词），失败回落 `status tags:w`。因此 LMS 部署在独立服务器、曲库路径
+无法从本机访问时同样可用。若曲库中没有内嵌歌词，可用「手动载入本地 LRC…」
+按钮临时补充；带 `[mm:ss.xx]` 时间轴的歌词会随播放进度逐行高亮。
+
+专辑封面请求 LMS 的 `/music/<coverid>/cover_300x300.jpg` 或 `artwork_url`，
+解码为 PNG 后显示。解码按「LMS 已返回 PNG → macOS `sips` → Pillow →
+ffmpeg」逐级降级，全部为可选路径：`.app` 内置运行时不依赖 Pillow，最差
+情况仅显示文字占位符，不影响其他功能。
+
+LMS 若启用密码保护，可在 `~/.squeezelite_gui/config.json` 中填写
+`lms_user` / `lms_pass`（可选，文件权限 600）。
 
 ## 仓库内容（仅源码，不含任何二进制）
 

@@ -11,11 +11,14 @@ Squeezelite GUI  --  macOS 图形化配置 / 启动 / 升级工具
   3. 播放器名称 = 本机名称 + 音频设备简称（通过 -n 传给 LMS 服务端显示）
   4. 联网升级 Squeezelite（SourceForge 官方 macOS 二进制 / Homebrew），
      检查 LMS 服务端版本更新并提示，标注升级内容（GitHub commit 日志）
+  5. 「正在播放」：通过 LMS JSON-RPC 获取播放器状态、曲目信息、专辑封面，
+     并从 LMS 端（songinfo tags:w）取歌词，支持 LRC 时间轴逐行同步
 
 数据来源（均可自定义/降级）：
   - 参数说明：官方 manpage https://ralph-irving.github.io/squeezelite.html (2025-10-10)
   - LMS 版本库：https://lyrion.org/lms-server-repository/servers.json
   - LMS 当前版本：JSON-RPC  POST /jsonrpc.js  {"params":[0,["version","?"]]}
+  - 正在播放：JSON-RPC serverstatus / status / songinfo(tags:w) / artwork
   - Squeezelite 二进制：https://sourceforge.net/projects/lmsclients/files/squeezelite/osx/{m1,intel}/
   - 升级内容：GitHub Atom commits（api.github.com 不可用时自动降级）
 
@@ -47,7 +50,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -127,6 +130,11 @@ DEFAULT_CONFIG = {
     "auto_scan": True,
     "auto_upgrade_check": False,
     "audio_preset": "best",
+    "np_auto": True,
+    "np_interval": "2",
+    "np_playerid": "",
+    "lms_user": "",
+    "lms_pass": "",
 }
 
 # ---------------------------------------------------------------- 参数库
@@ -915,6 +923,243 @@ def lms_current(cfg, log=None):
             pass
         return {"ok": False, "error": str(e)[:150], "url": url}
 
+# ---------------------------------------------------------------- Now Playing / LMS JSON-RPC
+def lms_base(cfg):
+    host = (cfg.get("lms_host") or "").strip()
+    port = (cfg.get("lms_port") or "9000").strip()
+    if not host:
+        raise RuntimeError("未填写 LMS 服务器地址（在「升级与更新」页设置）")
+    base = host if host.startswith("http") else "http://" + host
+    if not re.search(r":\d+(?:/|$)", base):
+        base = base.rstrip("/") + ":" + port
+    return base.rstrip("/")
+
+def lms_rpc(cfg, cmd, playerid="", timeout=6, _id=1):
+    url = lms_base(cfg) + "/jsonrpc.js"
+    payload = json.dumps({"id": _id, "method": "slim.request",
+                          "params": [playerid or "", list(cmd)]}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    user = (cfg.get("lms_user") or "").strip()
+    if user:
+        import base64
+        tok = base64.b64encode(("%s:%s" % (user, cfg.get("lms_pass") or ""))
+                               .encode("utf-8")).decode("ascii")
+        headers["Authorization"] = "Basic " + tok
+    raw = http_request(url, data=payload, headers=headers, timeout=timeout)
+    d = json.loads(raw.decode("utf-8", "replace"))
+    if "error" in d:
+        raise RuntimeError("LMS 返回错误: %s" % str(d["error"])[:120])
+    return d.get("result", {}) or {}
+
+def np_players(cfg):
+    r = lms_rpc(cfg, ["serverstatus", 0, 999], _id=11)
+    out = []
+    for p in (r.get("players_loop") or []):
+        out.append({
+            "id": str(p.get("playerid") or ""),
+            "name": str(p.get("name") or ""),
+            "model": str(p.get("model") or ""),
+            "ip": str(p.get("ip") or ""),
+            "connected": p.get("connected", 0),
+            "isplaying": p.get("isplaying", 0),
+        })
+    return out
+
+def np_pick_player(cfg, players, saved=""):
+    if not players:
+        return None
+    for p in players:
+        if saved and p["id"] == saved:
+            return p
+    want = ""
+    try:
+        want = make_player_name(cfg.get("host_name") or local_host_name(),
+                                cfg.get("device_short") or "",
+                                cfg.get("name_template") or "{host} - {short}")
+    except Exception:
+        pass
+    if want:
+        for p in players:
+            if p["name"] == want:
+                return p
+    host = (cfg.get("host_name") or "").strip()
+    if host:
+        for p in players:
+            if host.lower() in p["name"].lower():
+                return p
+    for p in players:
+        if p["isplaying"] and "squeezelite" in (p["model"] + p["name"]).lower():
+            return p
+    if len(players) == 1:
+        return players[0]
+    return None
+
+def _to_float(v):
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+def fmt_sec(v):
+    try:
+        n = max(0, int(float(v)))
+    except Exception:
+        return "0:00"
+    return "%d:%02d" % (n // 60, n % 60)
+
+def np_status(cfg, playerid, with_lyrics=False):
+    tags = "alcKdtu" + ("w" if with_lyrics else "")
+    r = lms_rpc(cfg, ["status", "-", "1", "tags:" + tags], playerid, _id=12)
+    loop = r.get("playlist_loop") or []
+    try:
+        idx = int(r.get("playlist_cur_index") or 0)
+    except Exception:
+        idx = 0
+    cur = loop[idx] if 0 <= idx < len(loop) else (loop[0] if loop else {})
+    return {
+        "mode": str(r.get("mode") or "stop"),
+        "power": r.get("power", 1),
+        "time": _to_float(r.get("time")),
+        "duration": _to_float(cur.get("duration") or r.get("duration")),
+        "player_name": str(r.get("player_name") or ""),
+        "player_connected": r.get("player_connected", 0),
+        "index": idx,
+        "count": len(loop),
+        "track": {k: ("" if v is None else str(v)) for k, v in cur.items()},
+    }
+
+def np_lyrics_from_lms(cfg, track_id, playerid=""):
+    # 主路径：songinfo tags:w —— 歌词由 LMS 扫描入库，完全不依赖本地挂载点
+    if track_id:
+        try:
+            r = lms_rpc(cfg, ["songinfo", 0, 100, "track_id:" + str(track_id),
+                              "tags:wlc"], _id=13)
+            for item in (r.get("songinfo_loop") or []):
+                if isinstance(item, dict):
+                    for k in ("lyrics", "w"):
+                        if item.get(k):
+                            return str(item[k]), "LMS songinfo (tags:w)"
+            for k in ("lyrics", "w"):
+                if r.get(k):
+                    return str(r[k]), "LMS songinfo (tags:w)"
+        except Exception:
+            pass
+    # 兜底：部分 LMS 版本把歌词放在 status 的 playlist_loop 里
+    try:
+        r = lms_rpc(cfg, ["status", "-", "1", "tags:w"], playerid, _id=14)
+        for item in (r.get("playlist_loop") or [])[:3]:
+            if isinstance(item, dict) and item.get("lyrics"):
+                return str(item["lyrics"]), "LMS status (tags:w)"
+    except Exception:
+        pass
+    return "", ""
+
+def parse_lrc(text):
+    lines, meta = [], {}
+    tag_re = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
+    meta_re = re.compile(r"^\[(ti|ar|al|by|offset|re|ve):(.*)\]$", re.I)
+    for ln in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        s = ln.strip()
+        if not s:
+            continue
+        m = meta_re.match(s)
+        if m:
+            meta[m.group(1).lower()] = m.group(2).strip()
+            continue
+        stamps = list(tag_re.finditer(s))
+        if stamps:
+            body = s[stamps[-1].end():].strip()
+            for st in stamps:
+                mm, ss, frac = st.group(1), st.group(2), st.group(3) or "0"
+                try:
+                    sec = int(mm) * 60 + int(ss) + float("0." + frac)
+                except Exception:
+                    continue
+                lines.append((sec, body))
+        else:
+            lines.append((-1.0, s))
+    timed = any(t >= 0 for t, _ in lines)
+    if timed:
+        lines = sorted([(t, x) for t, x in lines if t >= 0], key=lambda a: a[0])
+    else:
+        lines = [(i * 3.0, x) for i, (_, x) in enumerate(lines)]
+    return {"timed": timed, "lines": lines, "meta": meta}
+
+def np_cover_url(cfg, coverid, artwork_url=""):
+    base = lms_base(cfg)
+    a = (artwork_url or "").strip()
+    if a:
+        if a.startswith("http://") or a.startswith("https://"):
+            return a
+        return base + (a if a.startswith("/") else "/" + a)
+    c = str(coverid or "").strip()
+    if not c or c in ("0", "-1"):
+        return ""
+    return base + "/music/" + urllib.parse.quote(c, safe="") + "/cover_300x300.jpg"
+
+def decode_cover_png(data):
+    # 返回可直接喂给 tk.PhotoImage(data=...) 的 PNG 字节；无法转换返回 None
+    if not data:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data
+    if not (data[:3] == b"\xff\xd8\xff" or data[:6] in (b"GIF87a", b"GIF89a")
+            or data[:4] == b"RIFF"):
+        return None
+    # 1) macOS 自带 sips（.app 内置运行时无 Pillow 时首选）
+    if IS_MAC and shutil.which("sips"):
+        src = dst = ""
+        try:
+            import tempfile
+            fd, src = tempfile.mkstemp(suffix=".img")
+            os.close(fd)
+            dst = src + ".png"
+            with open(src, "wb") as f:
+                f.write(data)
+            subprocess.run(["sips", "-s", "format", "png",
+                            "--resampleHeightWidthMax", "320", src, "--out", dst],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=8, check=False)
+            if os.path.isfile(dst):
+                with open(dst, "rb") as f:
+                    out = f.read()
+                if out[:8] == b"\x89PNG\r\n\x1a\n":
+                    return out
+        except Exception:
+            pass
+        finally:
+            for x in (src, dst):
+                if x:
+                    try:
+                        if os.path.isfile(x):
+                            os.remove(x)
+                    except Exception:
+                        pass
+    # 2) Pillow（开发环境 / 已安装时）
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        im.thumbnail((320, 320))
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:
+        pass
+    # 3) ffmpeg 兜底
+    if shutil.which("ffmpeg"):
+        try:
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+                                "-i", "pipe:0", "-frames:v", "1",
+                                "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
+                               input=data, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=8, check=False)
+            if r.stdout[:8] == b"\x89PNG\r\n\x1a\n":
+                return r.stdout
+        except Exception:
+            pass
+    return None
+
+
 def lms_latest(log=None, cfg=None):
     cfg = cfg or {}
     urls = [cfg.get("sources", {}).get("lms_repo"), SOURCES["lms_repo"], SOURCES["lms_repo_alt"]]
@@ -1092,6 +1337,10 @@ def save_config(cfg):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(CONFIG_PATH, 0o600)
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -1154,6 +1403,7 @@ class App(tk.Tk):
         self._log("配置文件: %s" % CONFIG_PATH)
         self._refresh_preview()
         self._mac_render_fix()
+        self.after(500, self._np_tick)
         if os.environ.get("SQUEEZELITE_GUI_NO_AUTOSCAN") != "1":
             if self.cfg.get("auto_scan", True):
                 self.after(350, self._scan_devices)
@@ -1203,6 +1453,10 @@ class App(tk.Tk):
         self._init_style()
         self._retheme_tk(self)
         self._refresh_tree_tags()
+        try:
+            self._np_apply_lyric_tags()
+        except Exception:
+            pass
         try:
             C = self.C
             self.theme_btn.configure(
@@ -1489,13 +1743,16 @@ class App(tk.Tk):
         self.tab_launch = ttk.Frame(self.nb)
         self.tab_update = ttk.Frame(self.nb)
         self.tab_help = ttk.Frame(self.nb)
+        self.tab_now = ttk.Frame(self.nb)
         for f, t in [(self.tab_devices, "设备与名称"), (self.tab_params, "参数配置"),
-                     (self.tab_launch, "启动控制"), (self.tab_update, "升级与更新"),
+                     (self.tab_launch, "启动控制"), (self.tab_now, "正在播放"),
+                     (self.tab_update, "升级与更新"),
                      (self.tab_help, "日志 / 帮助")]:
             self.nb.add(f, text="  " + t + "  ")
         self._build_tab_params()   # 参数控件需先建立：设备页的命名会写入 -n
         self._build_tab_devices()
         self._build_tab_launch()
+        self._build_tab_now()
         self._build_tab_update()
         self._build_tab_help()
         self._refresh_tree_tags()
@@ -1559,6 +1816,16 @@ class App(tk.Tk):
                         pass
                 elif kind == "proc_exit":
                     self._on_proc_exit(data)
+                elif kind == "np_players":
+                    self._np_fill_players(data)
+                elif kind == "np_update":
+                    self._np_render(data)
+                elif kind == "np_lyrics":
+                    self._np_on_lyrics(data)
+                elif kind == "np_cover":
+                    self._np_on_cover(data)
+                elif kind == "np_error":
+                    self._np_on_error(str(data))
                 elif kind == "refresh":
                     self._refresh_preview()
         except queue.Empty:
@@ -2456,7 +2723,412 @@ class App(tk.Tk):
         else:
             self.q.put(("error", "配置保存失败"))
 
+    # ------------------------------------------------ Tab: 正在播放 (Now Playing)
+    def _build_tab_now(self):
+        f = self.tab_now
+        self._np_alive = True
+        self.np_busy = False
+        self._np_pl_busy = False
+        self._np_pl_last = 0.0
+        self._np_last_poll = 0.0
+        self._np_fail = 0
+        self.np_players = []
+        self.np_player = None
+        self.np_track_key = ""
+        self.np_lyrics = ""
+        self.np_lyrics_src = ""
+        self.np_lrc = {"timed": False, "lines": [], "meta": {}}
+        self.np_timed = False
+        self.np_mode = "stop"
+        self.np_time = 0.0
+        self.np_time_at = 0.0
+        self.np_cover_key = ""
+        self.np_photo = None
+        self.np_cur_line = -1
+
+        bar = ttk.Frame(f, padding=(10, 8))
+        bar.pack(fill="x")
+        ttk.Label(bar, text="播放器").pack(side="left")
+        self.np_player_var = tk.StringVar(value="（未连接）")
+        self.np_player_cb = ttk.Combobox(bar, textvariable=self.np_player_var,
+                                         state="readonly", width=36, values=[])
+        self.np_player_cb.pack(side="left", padx=5)
+        self.np_player_cb.bind("<<ComboboxSelected>>", lambda e: self._np_on_pick())
+        ttk.Button(bar, text="刷新播放器",
+                   command=lambda: self._np_refresh_players(True)
+                   ).pack(side="left", padx=3)
+        self.np_auto_var = tk.BooleanVar(value=bool(self.cfg.get("np_auto", True)))
+        ttk.Checkbutton(bar, text="自动跟随", variable=self.np_auto_var,
+                        command=self._np_on_auto).pack(side="left", padx=(14, 3))
+        ttk.Label(bar, text="间隔(秒)").pack(side="left", padx=(10, 2))
+        self.np_int_var = tk.StringVar(value=str(self.cfg.get("np_interval", "2")))
+        icb = ttk.Combobox(bar, textvariable=self.np_int_var, state="readonly",
+                           width=5, values=["1", "2", "3", "5", "10"])
+        icb.pack(side="left")
+        icb.bind("<<ComboboxSelected>>", lambda e: self._np_on_interval())
+        self.np_state_lbl = ttk.Label(bar, text="● 未连接", style="Hint.TLabel")
+        self.np_state_lbl.pack(side="right", padx=6)
+
+        body = ttk.Frame(f, padding=(10, 4))
+        body.pack(fill="both", expand=True)
+        left = ttk.Frame(body, width=250)
+        left.pack(side="left", fill="y", padx=(0, 12))
+        left.pack_propagate(False)
+        self.np_cover_lbl = tk.Label(left, text="无封面", width=30, height=14,
+                                     anchor="center", justify="center")
+        self.np_cover_lbl.pack(pady=(2, 8))
+        ctl = ttk.Frame(left)
+        ctl.pack(fill="x")
+        ttk.Button(ctl, text="◀ 上一首",
+                   command=lambda: self._np_cmd(["playlist", "index", "-1"])
+                   ).pack(side="left", padx=2)
+        ttk.Button(ctl, text="播放 / 暂停", command=self._np_toggle,
+                   style="Accent.TButton").pack(side="left", padx=2)
+        ttk.Button(ctl, text="下一首 ▶",
+                   command=lambda: self._np_cmd(["playlist", "index", "+1"])
+                   ).pack(side="left", padx=2)
+        ttk.Button(left, text="立即刷新",
+                   command=self._np_force_poll).pack(fill="x", pady=(6, 0))
+        ttk.Button(left, text="手动载入本地 LRC…",
+                   command=self._np_load_local_lrc).pack(fill="x", pady=(4, 0))
+
+        right = ttk.Frame(body)
+        right.pack(side="left", fill="both", expand=True)
+        self.np_title = ttk.Label(right, text="—", style="Title.TLabel", anchor="w")
+        self.np_title.pack(fill="x")
+        self.np_artist = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
+        self.np_artist.pack(fill="x", pady=(2, 0))
+        self.np_album = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
+        self.np_album.pack(fill="x", pady=(2, 0))
+        self.np_prog = ttk.Progressbar(right, mode="determinate", maximum=100, value=0)
+        self.np_prog.pack(fill="x", pady=(8, 2))
+        self.np_meta = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
+        self.np_meta.pack(fill="x")
+        self.np_src_lbl = ttk.Label(right, text="歌词：等待 LMS",
+                                    style="Rec.TLabel", anchor="w")
+        self.np_src_lbl.pack(fill="x", pady=(6, 2))
+        self.np_lyr_text = tk.Text(right, height=12, wrap="word",
+                                   font=self.ui_font, **self._text_opts(False))
+        self.np_lyr_text.pack(fill="both", expand=True)
+        self.np_lyr_text.configure(state="disabled")
+        self._attach_wheel(self.np_lyr_text, self.np_lyr_text)
+        self._np_apply_lyric_tags()
+        self._np_set_cover_placeholder("无封面")
+        self.after(400, self._np_refresh_players)
+
+    def _np_apply_lyric_tags(self):
+        C = self.C
+        try:
+            self.np_lyr_text.tag_configure("cur", background=C["sel"],
+                                           foreground=C["sel_text"])
+            self.np_lyr_text.tag_configure("dim", foreground=C["text3"])
+        except Exception:
+            pass
+
+    def _np_set_cover_placeholder(self, msg):
+        C = self.C
+        try:
+            self.np_cover_lbl.configure(text=msg, image="",
+                                        background=C["surface2"],
+                                        foreground=C["text3"])
+        except Exception:
+            pass
+
+    def _np_show_lyrics(self, text, src_label=""):
+        try:
+            self.np_lyr_text.configure(state="normal")
+            self.np_lyr_text.delete("1.0", "end")
+            self.np_lyr_text.insert("1.0", text or "（暂无歌词）")
+            self.np_lyr_text.configure(state="disabled")
+        except Exception:
+            pass
+        if src_label:
+            try:
+                self.np_src_lbl.configure(text=src_label)
+            except Exception:
+                pass
+
+    def _np_highlight(self, pos, force=False):
+        if not self.np_timed:
+            return
+        lines = self.np_lrc["lines"]
+        if not lines:
+            return
+        idx = 0
+        for i, (t, _) in enumerate(lines):
+            if t <= pos + 0.15:
+                idx = i
+            else:
+                break
+        if idx == self.np_cur_line and not force:
+            return
+        self.np_cur_line = idx
+        try:
+            self.np_lyr_text.tag_remove("cur", "1.0", "end")
+            self.np_lyr_text.tag_add("cur", "%d.0" % (idx + 1), "%d.end" % (idx + 1))
+            self.np_lyr_text.see("%d.0" % (idx + 1))
+        except Exception:
+            pass
+
+    def _np_render(self, d):
+        st = d.get("status") or {}
+        tr = st.get("track") or {}
+        self.np_mode = st.get("mode") or "stop"
+        self.np_title.configure(text=tr.get("title") or "—")
+        self.np_artist.configure(text=tr.get("artist") or "未知艺术家")
+        self.np_album.configure(text=tr.get("album") or "未知专辑")
+        dur, pos = st.get("duration") or 0.0, st.get("time") or 0.0
+        self.np_prog.configure(value=(min(100.0, pos / dur * 100.0) if dur > 0 else 0))
+        label = {"play": "播放中", "pause": "已暂停", "stop": "已停止"}.get(
+            self.np_mode, self.np_mode)
+        self.np_meta.configure(text="%s / %s   ·   %s   ·   队列 %d/%d" % (
+            fmt_sec(pos), fmt_sec(dur), label, st["index"] + 1, st["count"]))
+        pname = st.get("player_name") or (self.np_player or {}).get("name", "")
+        self.np_state_lbl.configure(text="● 已连接 · %s" % pname)
+        self.np_time = pos
+        self.np_time_at = time.monotonic()
+        key = "%s|%s" % (tr.get("id", ""), tr.get("title", ""))
+        if key != self.np_track_key:
+            self.np_track_key = key
+            self.np_lyrics = ""
+            self.np_lyrics_src = ""
+            self.np_lrc = {"timed": False, "lines": [], "meta": {}}
+            self.np_timed = False
+            self.np_cur_line = -1
+            self.np_cover_key = ""
+            self._np_set_cover_placeholder("载入封面…")
+            self._np_show_lyrics("", "歌词：正在从 LMS 获取…")
+            self._np_async_extras(tr.get("id", ""), tr.get("coverid", ""),
+                                  tr.get("artwork_url", ""))
+        self._np_highlight(pos, force=True)
+
+    def _np_async_extras(self, track_id, coverid, artwork_url):
+        key = self.np_track_key
+        pid = (self.np_player or {}).get("id", "")
+        cfg = dict(self.cfg)
+
+        def worker():
+            try:
+                lyr, src = np_lyrics_from_lms(cfg, track_id, pid)
+                self.q.put(("np_lyrics", {"key": key, "lyrics": lyr, "src": src}))
+            except Exception:
+                self.q.put(("np_lyrics", {"key": key, "lyrics": "", "src": ""}))
+            try:
+                url = np_cover_url(cfg, coverid, artwork_url)
+                if url:
+                    data = http_request(url, timeout=8)
+                    png = decode_cover_png(data)
+                    self.q.put(("np_cover", {"key": key, "url": url, "png": png}))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_on_lyrics(self, d):
+        if d.get("key") != self.np_track_key:
+            return
+        lyr = d.get("lyrics") or ""
+        self.np_lyrics = lyr
+        self.np_lyrics_src = d.get("src") or ""
+        self.np_lrc = parse_lrc(lyr)
+        self.np_timed = bool(lyr) and self.np_lrc["timed"]
+        self.np_cur_line = -1
+        if not lyr:
+            self._np_show_lyrics(
+                "", "歌词：LMS 未提供内嵌歌词，可点「手动载入本地 LRC…」补充")
+        else:
+            lines = [x for _, x in self.np_lrc["lines"]]
+            self._np_show_lyrics(
+                "\n".join(lines) if lines else lyr,
+                "歌词来源：%s · %s" % (self.np_lyrics_src,
+                                  "时间轴同步" if self.np_timed else "纯文本"))
+        self._np_highlight(self.np_time, force=True)
+
+    def _np_on_cover(self, d):
+        if d.get("key") != self.np_track_key:
+            return
+        png = d.get("png")
+        if not png:
+            self._np_set_cover_placeholder("封面不可用")
+            return
+        try:
+            import base64
+            self.np_photo = tk.PhotoImage(data=base64.b64encode(png).decode("ascii"))
+            self.np_cover_lbl.configure(image=self.np_photo, text="",
+                                        background=self.C["surface"])
+        except Exception as e:
+            self._np_set_cover_placeholder("封面加载失败")
+            self._log("Now Playing 封面: %s" % str(e)[:110])
+
+    def _np_on_error(self, msg):
+        self._np_fail += 1
+        try:
+            self.np_state_lbl.configure(text="● 连接失败")
+        except Exception:
+            pass
+        if self._np_fail in (1, 2) or self._np_fail % 15 == 0:
+            self._log("Now Playing: %s" % msg)
+
+    def _np_refresh_players(self, force=False):
+        if not (self.cfg.get("lms_host") or "").strip():
+            self._np_on_error("未填写 LMS 服务器地址（在「升级与更新」页设置）")
+            return
+        if getattr(self, "_np_pl_busy", False):
+            return
+        now = time.monotonic()
+        if (not force and getattr(self, "_np_pl_last", 0.0)
+                and now - self._np_pl_last < 8):
+            return
+        self._np_pl_last = now
+        self._np_pl_busy = True
+
+        def worker():
+            try:
+                self.q.put(("np_players", np_players(dict(self.cfg))))
+            except Exception as e:
+                self.q.put(("np_error", "获取播放器列表失败: " + str(e)[:120]))
+            finally:
+                self._np_pl_busy = False
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_fill_players(self, ps):
+        self.np_players = ps or []
+        names = ["%s  [%s]" % (p["name"] or p["id"], p["id"][-8:] or p["id"])
+                 for p in self.np_players]
+        try:
+            self.np_player_cb.configure(values=names or ["（无播放器）"])
+        except Exception:
+            pass
+        pick = np_pick_player(self.cfg, self.np_players,
+                              self.cfg.get("np_playerid", ""))
+        if pick:
+            self._np_set_player(pick)
+        elif self.np_players:
+            self._np_set_player(self.np_players[0])
+        else:
+            self.np_player = None
+            self.np_player_var.set("（无播放器）")
+            self._np_on_error("LMS 未报告任何播放器")
+
+    def _np_set_player(self, p):
+        self.np_player = p
+        self.cfg["np_playerid"] = p["id"]
+        try:
+            self.np_player_var.set("%s  [%s]" % (
+                p["name"] or p["id"], p["id"][-8:] or p["id"]))
+            save_config(self.cfg)
+        except Exception:
+            pass
+        self._log("Now Playing: 选定播放器 %s (%s)" % (p["name"], p["id"]))
+        self._np_last_poll = 0.0
+
+    def _np_on_pick(self):
+        try:
+            i = self.np_player_cb.current()
+            if 0 <= i < len(self.np_players):
+                self._np_set_player(self.np_players[i])
+        except Exception:
+            pass
+
+    def _np_on_auto(self):
+        self.cfg["np_auto"] = bool(self.np_auto_var.get())
+        try:
+            save_config(self.cfg)
+        except Exception:
+            pass
+
+    def _np_on_interval(self):
+        self.cfg["np_interval"] = self.np_int_var.get()
+        try:
+            save_config(self.cfg)
+        except Exception:
+            pass
+
+    def _np_force_poll(self):
+        self._np_last_poll = 0.0
+        if not self.np_busy:
+            self._np_poll_once()
+
+    def _np_toggle(self):
+        self._np_cmd(["pause"] if self.np_mode == "play" else ["play"])
+
+    def _np_cmd(self, cmd):
+        if not self.np_player:
+            messagebox.showinfo(APP_NAME, "请先在下拉框中选择播放器")
+            return
+        pid = self.np_player["id"]
+        cfg = dict(self.cfg)
+
+        def worker():
+            try:
+                lms_rpc(cfg, cmd, pid, _id=20)
+                self._np_last_poll = 0.0
+            except Exception as e:
+                self.q.put(("np_error", "控制命令失败: " + str(e)[:120]))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_load_local_lrc(self):
+        p = filedialog.askopenfilename(
+            title="选择 LRC 歌词",
+            filetypes=[("LRC 歌词", "*.lrc"), ("文本", "*.txt"), ("全部", "*")])
+        if not p:
+            return
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                txt = f.read()
+        except Exception as e:
+            messagebox.showerror(APP_NAME, str(e))
+            return
+        self.np_lyrics = txt
+        self.np_lyrics_src = "本地 LRC（手动）"
+        self.np_lrc = parse_lrc(txt)
+        self.np_timed = self.np_lrc["timed"]
+        self.np_cur_line = -1
+        lines = [x for _, x in self.np_lrc["lines"]]
+        self._np_show_lyrics(
+            "\n".join(lines) if lines else txt,
+            "歌词来源：本地 LRC · %s" % ("时间轴同步" if self.np_timed else "纯文本"))
+        self._np_highlight(self.np_time, force=True)
+
+    def _np_poll_once(self):
+        if not (self.cfg.get("lms_host") or "").strip():
+            self._np_on_error("未填写 LMS 服务器地址（在「升级与更新」页设置）")
+            return
+        if not self.np_player:
+            self._np_refresh_players()
+            return
+        self.np_busy = True
+        pid = self.np_player["id"]
+        cfg = dict(self.cfg)
+
+        def worker():
+            try:
+                st = np_status(cfg, pid)
+                self.q.put(("np_update", {"status": st}))
+                self._np_fail = 0
+            except Exception as e:
+                self.q.put(("np_error", str(e)[:160]))
+            finally:
+                self.np_busy = False
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_tick(self):
+        if not getattr(self, "_np_alive", False):
+            return
+        now = time.monotonic()
+        try:
+            if self.np_timed and self.np_time_at:
+                self._np_highlight(self.np_time + (now - self.np_time_at))
+            interval = max(1, min(15, int(float(self.cfg.get("np_interval", "2") or 2))))
+            if (self.cfg.get("np_auto", True) and not self.np_busy
+                    and (now - self._np_last_poll) >= interval):
+                self._np_last_poll = now
+                self._np_poll_once()
+        except Exception as e:
+            self._log("Now Playing 轮询异常: %s" % str(e)[:110])
+        self.after(500, self._np_tick)
+
     def _on_close(self):
+        self._np_alive = False
         try:
             self._save_config()
         except Exception:
@@ -2470,6 +3142,13 @@ class App(tk.Tk):
 HELP_TEXT = """Squeezelite GUI · 使用说明
 界面：顶栏可一键切换亮色 / 深色（Lyrion Material 风格）；
 参数配置页、设备列表、版本列表均支持鼠标滚轮上下滚动。
+
+【正在播放】（v1.2.0）
+  先在「升级与更新」页填好 LMS 服务器地址，本页会自动列出播放器并跟随其状态。
+  曲目信息、专辑封面、歌词全部来自 LMS 服务端（songinfo tags:w），
+  不依赖本机音乐目录或任何挂载点；带时间轴的 LRC 会随播放进度逐行高亮。
+  若 LMS 设置了密码，可在配置文件的 lms_user / lms_pass 中填写（可选）。
+  遥控端（手机 / 网页）发起播放后，本页会自动更新，无需在本 APP 内点播。
 
 ================================================================================
 
