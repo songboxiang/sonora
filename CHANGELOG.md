@@ -3,6 +3,46 @@
 本项目遵循语义化版本：发布时同步更新 `squeezelite_gui.py` 中的 `VERSION`
 常量，并打附注标签 `vX.Y.Z`。
 
+## v1.5.0 (2026-11-22) — 音频链路直通判定、简介视图、专注大屏与 UI 收敛
+
+- **修复「下一曲」被挤出画面**：正在播放页左卡片的播放控制区由 `pack`
+  改为三列等宽 `grid`（上一首 / 播放暂停 / 下一首），窄窗口下不再溢出。
+- **封面统一为正方形**：`decode_cover_png()` 新增 `square=True`，等比缩放后
+  居中补边（不变形），依次用 `sips -p` / Pillow / ffmpeg `scale+pad`；
+  正在播放 280 px、专注大屏 420 px、音乐库详情 272 px、列表缩略图 44 px
+  全部走同一路径，修复专辑与曲目封面有大有小的问题。
+- **主题分段控件重做**：由 macOS Aqua 下背景色不可靠的 `tk.Button` 改为
+  `ttk.Label` + `ThemeSeg.TLabel` / `ThemeSegOn.TLabel` 自绘样式，选中项
+  反色胶囊、未选中项融入 app bar，浅色 / 深色 / 跟随系统三态均清晰可读。
+- **音频链路 / 完美直通判定**（新增）：`audio_spec()` 从 LMS `status` /
+  `songinfo` 标签提取源格式（FLAC / WAV / DSD / PCM / MP3 / AAC）、采样率、
+  位深与码率；按真实 LMS 9.1.1 抽样补齐 `I`(位深) / `r`(码率) /
+  `o`(格式类型) 三个 tag（原有 `T` / `f` 对应采样率 / 文件大小），
+  位深与码率优先采用 LMS 报告值，缺失时才按文件大小与时长推算，
+  并支持用 LMS `type` 在 url 被重写时兜底判定格式；
+  `_start_proc()` 自动追加 `-d output=info`，
+  `parse_sl_output()` 从 squeezelite 日志解析实际输出采样率、DSD 封装与
+  「converting to PCM」；`audio_link_verdict()` 结合源 / 输出采样率、LMS
+  音量与播放速率，给出「完美直通 / 未发现转码迹象 / 已转码 / 已重采样 /
+  数字音量介入 / 非 1 倍速 / 待确认」判定。播放器非本 APP 启动时明确标注
+  无法读取输出日志，仅显示 LMS 源文件规格。
+- **可视化页改为「歌手 / 专辑简介」**：真实 FFT 在本架构不可行（PCM 由 LMS
+  经 Slimproto 直送 squeezelite，不经过本 APP；macOS 无原生回环采集），
+  因此移除装饰性节奏动画与 `np_viz_canvas` / `viz_frame()` 死代码。新视图
+  用 LMS 标签展示专辑元信息，长篇简介取自维基百科中 / 英文 API；若 LMS
+  启用 Music & Artist Information 类插件，可设 `bio_lms_plugin=true` 改用
+  `artistinfo` / `albuminfo`（默认关闭，未装插件会断连）。结果缓存于
+  `~/.squeezelite_gui/bio_cache.json`（权限 600，上限 300 条），页面提供
+  「重新获取简介」。
+- **专注大屏模式**（新增）：`tk.Toplevel` 全屏，420 px 正方形大封面、大字
+  歌词、曲目信息、进度与控制；`ESC` 退出，`<Motion>` 浮出「✕ 退出专注
+  模式」按钮，静止约 3 秒自动隐藏；配色随主窗口明暗主题同步刷新。
+- **UI 风格收敛**：新增 `Hero.TLabel` / `Muted.TLabel` / `Ok.TLabel` /
+  `Warn.TLabel` / `Card.TFrame` 与细进度条，卡片细边框、字号层级、分隔线
+  与状态色统一，向 Lyrion Material / Audirvana 播放器看齐。
+- 仍为纯标准库 tkinter 单文件，未引入新依赖；新增缓存文件仅
+  `bio_cache.json`。
+
 ## v1.4.0 (2026-11-22) — 主题控件、专辑下钻、音乐库卡片式重排
 
 - **修复顶栏主题选择器对比度**：原 `ttk.Combobox` 在深色 app bar 上被系统

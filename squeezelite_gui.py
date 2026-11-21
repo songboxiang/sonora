@@ -50,7 +50,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -1017,7 +1017,9 @@ def fmt_sec(v):
     return "%d:%02d" % (n // 60, n % 60)
 
 def np_status(cfg, playerid, with_lyrics=False):
-    tags = "alcKdtugybiTCmSf" + ("w" if with_lyrics else "")
+    # I=samplesize(位深), T=samplerate, r=bitrate, f=filesize, o=type。
+    # 实测 LMS 9.1.1：缺 I/r/o 时位深显示「—」、码率只能靠文件大小推算。
+    tags = "alcKdtugybiTCmSfIro" + ("w" if with_lyrics else "")
     r = lms_rpc(cfg, ["status", "-", "1", "tags:" + tags], playerid, _id=12)
     loop = r.get("playlist_loop") or []
     try:
@@ -1034,6 +1036,11 @@ def np_status(cfg, playerid, with_lyrics=False):
         "player_connected": r.get("player_connected", 0),
         "index": idx,
         "count": len(loop),
+        "digital_volume_control": r.get("digital_volume_control", 1),
+        "volume": r.get("mixer volume", 100),
+        "rate": r.get("rate", 1),
+        "playlist_mode": str(r.get("playlist mode") or ""),
+        "use_volume_control": r.get("use_volume_control", 1),
         "track": {k: ("" if v is None else str(v)) for k, v in cur.items()},
     }
 
@@ -1106,69 +1113,116 @@ def np_cover_url(cfg, coverid, artwork_url=""):
         return ""
     return base + "/music/" + urllib.parse.quote(c, safe="") + "/cover_300x300.jpg"
 
-def decode_cover_png(data, max_size=320):
-    # 返回可直接喂给 tk.PhotoImage(data=...) 的 PNG 字节；无法转换返回 None
+_PNG_MAGIC = bytes((137, 80, 78, 71, 13, 10, 26, 10))
+_JPG_MAGIC = bytes((255, 216, 255))
+_GIF_MAGIC = (b"GIF87a", b"GIF89a")
+_RIFF_MAGIC = b"RIFF"
+
+
+def _hex_rgb(s):
+    s = str(s or "#0d292d").lstrip("#")
+    try:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except Exception:
+        return (13, 41, 45)
+
+
+def decode_cover_png(data, max_size=320, square=False, pad_color="#0d292d"):
+    """返回可直接喂给 tk.PhotoImage(data=...) 的 PNG 字节；失败返回 None。
+
+    square=True 时统一输出 max_size x max_size 正方形：等比缩放后居中补边，
+    不变形。列表缩略图必须用它 —— 原始 PNG 或非正方形封面否则会大小不一。
+    """
     if not data:
         return None
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
+    is_png = data[:8] == _PNG_MAGIC
+    if not square and is_png:
         return data
-    if not (data[:3] == b"\xff\xd8\xff" or data[:6] in (b"GIF87a", b"GIF89a")
-            or data[:4] == b"RIFF"):
+    if not (is_png or data[:3] == _JPG_MAGIC or data[:6] in _GIF_MAGIC
+            or data[:4] == _RIFF_MAGIC):
         return None
-    # 1) macOS 自带 sips（.app 内置运行时无 Pillow 时首选）
+    pad = str(pad_color or "#0d292d").lstrip("#")[:6].upper() or "0D292D"
+    tmp = []
+
+    def cleanup():
+        for x in tmp:
+            try:
+                if x and os.path.isfile(x):
+                    os.remove(x)
+            except Exception:
+                pass
+
+    # 1) macOS sips（.app 内置运行时无 Pillow 时首选）
     if IS_MAC and shutil.which("sips"):
-        src = dst = ""
         try:
             import tempfile
-            fd, src = tempfile.mkstemp(suffix=".img")
+            fd, sp = tempfile.mkstemp(suffix=".img")
             os.close(fd)
-            dst = src + ".png"
-            with open(src, "wb") as f:
+            tmp.append(sp)
+            with open(sp, "wb") as f:
                 f.write(data)
+            mid = sp + "-s.png"
+            tmp.append(mid)
             subprocess.run(["sips", "-s", "format", "png",
                             "--resampleHeightWidthMax", str(max_size),
-                            src, "--out", dst],
+                            sp, "--out", mid],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            timeout=8, check=False)
-            if os.path.isfile(dst):
-                with open(dst, "rb") as f:
+            final = mid
+            if square and os.path.isfile(mid):
+                sq = sp + "-p.png"
+                tmp.append(sq)
+                subprocess.run(["sips", "-p", str(max_size), str(max_size),
+                                "--padColor", pad, mid, "--out", sq],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=8, check=False)
+                if os.path.isfile(sq) and os.path.getsize(sq) > 0:
+                    final = sq
+            if os.path.isfile(final):
+                with open(final, "rb") as f:
                     out = f.read()
-                if out[:8] == b"\x89PNG\r\n\x1a\n":
+                if out[:8] == _PNG_MAGIC:
                     return out
         except Exception:
             pass
         finally:
-            for x in (src, dst):
-                if x:
-                    try:
-                        if os.path.isfile(x):
-                            os.remove(x)
-                    except Exception:
-                        pass
-    # 2) Pillow（开发环境 / 已安装时）
+            cleanup()
+    # 2) Pillow
     try:
         from PIL import Image
+        resample = getattr(Image, "LANCZOS", 1)
         im = Image.open(io.BytesIO(data))
-        im.thumbnail((max_size, max_size))
+        im.thumbnail((max_size, max_size), resample)
+        if square:
+            canvas = Image.new("RGB", (max_size, max_size), _hex_rgb(pad_color))
+            rgb = im.convert("RGB")
+            canvas.paste(rgb, ((max_size - rgb.width) // 2,
+                               (max_size - rgb.height) // 2))
+            im = canvas
         buf = io.BytesIO()
         im.convert("RGB").save(buf, "PNG")
-        return buf.getvalue()
+        out = buf.getvalue()
+        if out[:8] == _PNG_MAGIC:
+            return out
     except Exception:
         pass
     # 3) ffmpeg 兜底
     if shutil.which("ffmpeg"):
         try:
+            vf = "scale=%d:%d:force_original_aspect_ratio=decrease" % (max_size, max_size)
+            if square:
+                vf += ",pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=0x%s" % (
+                    max_size, max_size, pad)
             r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error",
-                                "-i", "pipe:0", "-frames:v", "1",
+                                "-i", "pipe:0", "-frames:v", "1", "-vf", vf,
                                 "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
                                input=data, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, timeout=8, check=False)
-            if r.stdout[:8] == b"\x89PNG\r\n\x1a\n":
+            if r.stdout[:8] == _PNG_MAGIC:
                 return r.stdout
         except Exception:
             pass
     return None
-
 
 def lms_latest(log=None, cfg=None):
     cfg = cfg or {}
@@ -1600,7 +1654,8 @@ class App(tk.Tk):
         self.small_font = (fam, 9)
         self.bold_font = (fam, 11, "bold")
         self.head_font = (fam, 10, "bold")
-        self.title_font = (fam, 14, "bold")
+        self.title_font = (fam, 15, "bold")
+        self.display_font = (fam, 20, "bold")
         self.mono_font = ("Menlo", 10) if IS_MAC else ("DejaVu Sans Mono", 10)
 
         style.configure(".", background=C["bg"], foreground=C["text"],
@@ -1707,7 +1762,7 @@ class App(tk.Tk):
         style.configure("TProgressbar", background=C["primary"],
                         troughcolor=C["surface2"], bordercolor=C["surface2"],
                         lightcolor=C["primary"], darkcolor=C["primary"],
-                        relief="flat")
+                        relief="flat", thickness=6, borderwidth=0)
         style.configure("TCheckbutton", background=C["bg"],
                         foreground=C["text"], font=(fam, 10),
                         indicatorcolor=C["surface"], bordercolor=C["border"])
@@ -1718,6 +1773,26 @@ class App(tk.Tk):
                         foreground=C["text2"], font=self.small_font)
         style.configure("Title.TLabel", background=C["bg"],
                         foreground=C["text"], font=self.title_font)
+        style.configure("Hero.TLabel", background=C["bg"],
+                        foreground=C["text"], font=self.display_font)
+        style.configure("Muted.TLabel", background=C["bg"],
+                        foreground=C["text3"], font=self.small_font)
+        style.configure("Ok.TLabel", background=C["bg"],
+                        foreground=C["ok"], font=(fam, 10, "bold"))
+        style.configure("Warn.TLabel", background=C["bg"],
+                        foreground=C["warn"], font=(fam, 10, "bold"))
+        style.configure("Card.TFrame", background=C["surface"],
+                        bordercolor=C["border"], relief="solid", borderwidth=1)
+        # 主题分段：ttk 自绘，macOS Aqua 下也能保证三态都清晰
+        style.configure("ThemeSeg.TLabel", background=C["app_bar"],
+                        foreground=C["on_app_bar"], font=(fam, 10),
+                        padding=(13, 6), anchor="center")
+        style.configure("ThemeSegOn.TLabel", background=C["on_app_bar"],
+                        foreground=C["app_bar"], font=(fam, 10, "bold"),
+                        padding=(13, 6), anchor="center")
+        style.map("ThemeSeg.TLabel",
+                  background=[("active", C["primary_dark"])],
+                  foreground=[("active", C["on_app_bar"])])
         style.configure("Rec.TLabel", background=C["bg"],
                         foreground=C["ok"], font=self.small_font)
         style.configure("AppBar.TLabel", background=C["app_bar"],
@@ -1750,11 +1825,10 @@ class App(tk.Tk):
         seg.pack(side="right", padx=(6, 18))
         self.theme_segs = {}
         for label in ("浅色", "深色", "跟随系统"):
-            b = tk.Button(seg, text=label, relief="flat", bd=0,
-                          cursor="hand2", font=(self.fam, 10),
-                          padx=12, pady=4,
-                          command=lambda v=label: self._on_theme_choice(v))
+            b = ttk.Label(seg, text=label, style="ThemeSeg.TLabel",
+                          anchor="center", cursor="hand2", padding=(13, 6))
             b.pack(side="left")
+            b.bind("<Button-1>", lambda e, v=label: self._on_theme_choice(v))
             self.theme_segs[label] = b
         self._theme_seg_update()
         self.platform_lbl = tk.Label(
@@ -1800,6 +1874,19 @@ class App(tk.Tk):
         ttk.Button(foot, text="重新生成命令", command=self._refresh_preview).pack(side="right", padx=3)
 
     # ------------------------------------------------------------ 日志/队列
+    def _sl_ingest_log(self, line):
+        """从 squeezelite stdout/stderr 解析实际解码状态并刷新音频链路卡片。"""
+        try:
+            new, changed = parse_sl_output(
+                line, getattr(self, "sl_output", {}) or {})
+            if not changed:
+                return
+            self.sl_output = new
+            if getattr(self, "np_audio_data", None):
+                self._np_render_audio(*self.np_audio_data)
+        except Exception:
+            pass
+
     def _log(self, msg):
         line = "[%s] %s" % (now_str(), str(msg))
         try:
@@ -1844,6 +1931,7 @@ class App(tk.Tk):
                         self.proc_text.see("end")
                     except Exception:
                         pass
+                    self._sl_ingest_log(data)
                 elif kind == "proc_exit":
                     self._on_proc_exit(data)
                 elif kind == "np_players":
@@ -1854,6 +1942,10 @@ class App(tk.Tk):
                     self._np_on_lyrics(data)
                 elif kind == "np_cover":
                     self._np_on_cover(data)
+                elif kind == "np_bio":
+                    self._np_on_bio(data)
+                elif kind == "focus_cover":
+                    self._focus_on_cover(data)
                 elif kind == "np_error":
                     self._np_on_error(str(data))
                 elif kind == "sys_theme":
@@ -2470,6 +2562,10 @@ class App(tk.Tk):
             messagebox.showwarning("参数校验未通过", "\n\n".join(problems))
             return
         argv = build_argv(self.cfg, self.values)
+        # 自动开启 output 模块 info 日志：用于读取实际解码 / 输出采样率，
+        # 作为「完美直通」判定的权威依据（用户可在附加参数里自行覆盖）
+        if not any("output=" in str(a) for a in argv):
+            argv += ["-d", "output=info"]
         b = argv[0]
         if not os.path.isfile(b) or not os.access(b, os.X_OK):
             messagebox.showerror("无法启动",
@@ -2483,6 +2579,7 @@ class App(tk.Tk):
             messagebox.showerror("启动失败", str(e))
             return
         self.proc_start = time.time()
+        self.sl_output = {}
         self.proc_text.delete("1.0", "end")
         self.q.put(("proc_log", "$ %s\n\n" % preview_cmd(argv)))
         threading.Thread(target=self._reader, args=(self.proc,), daemon=True).start()
@@ -2499,6 +2596,7 @@ class App(tk.Tk):
             self.q.put(("proc_exit", proc.poll()))
 
     def _on_proc_exit(self, code):
+        self.sl_output = {}
         self.proc_status.configure(text="已退出 (code %s)" % code)
         self._log("squeezelite 进程结束，退出码 %s" % code)
         self.proc = None
@@ -2785,10 +2883,28 @@ class App(tk.Tk):
             self.q.put(("error", "配置保存失败"))
 
     # ------------------------------------------------ Tab: 正在播放 (Now Playing)
+    def _np_card(self, parent, bgkey="surface"):
+        C = self.C
+        fr = tk.Frame(parent, background=C[bgkey],
+                      highlightbackground=C["border"],
+                      highlightthickness=1, bd=0)
+        fr._sq_bg = bgkey
+        self.np_cards.append(fr)
+        return fr
+
+    def _np_label(self, parent, text, fg="text", size=10, bold=False):
+        C = self.C
+        l = tk.Label(parent, text=text, background=C["surface"],
+                     foreground=C[fg],
+                     font=(self.fam, size, "bold") if bold else (self.fam, size))
+        l._sq_bg = "surface"
+        l._sq_fg = fg
+        return l
+
     def _build_tab_now(self):
         f = self.tab_now
+        C = self.C
         self._np_alive = True
-        self._viz_alive = True
         self.np_busy = False
         self._np_pl_busy = False
         self._np_pl_last = 0.0
@@ -2810,7 +2926,12 @@ class App(tk.Tk):
         self.np_cur_line = -1
         self.np_view = "lyrics"
         self.np_detail = {}
-        self.np_viz_seed = 0.0
+        self.sl_output = getattr(self, "sl_output", {})
+        self.np_bio_key = ""
+        self.np_bio_cache = ("", "", "")
+        self.np_audio_data = None
+        self.np_cards = []
+        self.focus_win = None
 
         bar = ttk.Frame(f, padding=(10, 8))
         bar.pack(fill="x")
@@ -2820,7 +2941,7 @@ class App(tk.Tk):
                                          state="readonly", width=34, values=[])
         self.np_player_cb.pack(side="left", padx=5)
         self.np_player_cb.bind("<<ComboboxSelected>>", lambda e: self._np_on_pick())
-        ttk.Button(bar, text="刷新播放器",
+        ttk.Button(bar, text="刷新播放器", style="Tool.TButton",
                    command=lambda: self._np_refresh_players(True)
                    ).pack(side="left", padx=3)
         self.np_auto_var = tk.BooleanVar(value=bool(self.cfg.get("np_auto", True)))
@@ -2837,32 +2958,53 @@ class App(tk.Tk):
 
         body = ttk.Frame(f, padding=(10, 4))
         body.pack(fill="both", expand=True)
-        left = ttk.Frame(body, width=300)
+
+        # ---------------- 左：封面 + 控制（卡片） ----------------
+        left = self._np_card(body)
+        left.configure(width=320)
         left.pack(side="left", fill="y", padx=(0, 14))
         left.pack_propagate(False)
-        cover_box = ttk.Frame(left, width=280, height=280)
-        cover_box.pack(pady=(2, 10))
-        cover_box.pack_propagate(False)
-        self.np_cover_lbl = tk.Label(cover_box, text="无封面",
-                                     anchor="center", justify="center")
-        self.np_cover_lbl.pack(fill="both", expand=True)
-        ctl = ttk.Frame(left)
-        ctl.pack(fill="x")
-        ttk.Button(ctl, text="◀ 上一首",
-                   command=lambda: self._np_cmd(["playlist", "index", "-1"])
-                   ).pack(side="left", padx=2)
-        ttk.Button(ctl, text="播放 / 暂停", command=self._np_toggle,
-                   style="Accent.TButton").pack(side="left", padx=2)
-        ttk.Button(ctl, text="下一首 ▶",
-                   command=lambda: self._np_cmd(["playlist", "index", "+1"])
-                   ).pack(side="left", padx=2)
-        ttk.Button(left, text="立即刷新",
-                   command=self._np_force_poll).pack(fill="x", pady=(6, 0))
-        ttk.Button(left, text="重新搜索在线歌词",
-                   command=self._np_search_lyrics).pack(fill="x", pady=(4, 0))
-        ttk.Button(left, text="手动载入本地 LRC…",
-                   command=self._np_load_local_lrc).pack(fill="x", pady=(4, 0))
+        lin = tk.Frame(left, background=C["surface"], padx=14, pady=14)
+        lin._sq_bg = "surface"
+        lin.pack(fill="both", expand=True)
 
+        cover_box = tk.Frame(lin, background=C["surface2"],
+                             highlightbackground=C["border"],
+                             highlightthickness=1, bd=0,
+                             width=290, height=290)
+        cover_box.pack(pady=(0, 12))
+        cover_box.pack_propagate(False)
+        self.np_cover_box = cover_box
+        self.np_cover_lbl = tk.Label(cover_box, text="无封面",
+                                     anchor="center", justify="center",
+                                     background=C["surface2"],
+                                     foreground=C["text3"])
+        self.np_cover_lbl._sq_bg = "surface2"
+        self.np_cover_lbl._sq_fg = "text3"
+        self.np_cover_lbl.pack(fill="both", expand=True)
+
+        ctl = tk.Frame(lin, background=C["surface"])
+        ctl._sq_bg = "surface"
+        ctl.pack(fill="x", pady=(0, 8))
+        for i in range(3):
+            ctl.columnconfigure(i, weight=1)
+        ttk.Button(ctl, text="◀ 上一首", style="Tool.TButton",
+                   command=lambda: self._np_cmd(["playlist", "index", "-1"])
+                   ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        ttk.Button(ctl, text="播放 / 暂停", style="Accent.TButton",
+                   command=self._np_toggle
+                   ).grid(row=0, column=1, sticky="ew", padx=3)
+        ttk.Button(ctl, text="下一首 ▶", style="Tool.TButton",
+                   command=lambda: self._np_cmd(["playlist", "index", "+1"])
+                   ).grid(row=0, column=2, sticky="ew", padx=(3, 0))
+        for text, cmd in (("立即刷新", self._np_force_poll),
+                          ("⛶ 进入专注大屏", self._focus_open),
+                          ("重新搜索在线歌词", self._np_search_lyrics),
+                          ("手动载入本地 LRC…", self._np_load_local_lrc)):
+            ttk.Button(lin, text=text, style="Tool.TButton",
+                       command=cmd).pack(fill="x", pady=(4, 0))
+
+        # ---------------- 右：曲目 + 音频链路 + 三视图 ----------------
         right = ttk.Frame(body)
         right.pack(side="left", fill="both", expand=True)
         self.np_title = ttk.Label(right, text="—", style="Title.TLabel", anchor="w")
@@ -2876,15 +3018,36 @@ class App(tk.Tk):
         self.np_meta = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
         self.np_meta.pack(fill="x")
 
+        ac = self._np_card(right)
+        ac.pack(fill="x", pady=(10, 6))
+        ain = tk.Frame(ac, background=C["surface"], padx=12, pady=9)
+        ain._sq_bg = "surface"
+        ain.pack(fill="x")
+        ahdr = tk.Frame(ain, background=C["surface"])
+        ahdr._sq_bg = "surface"
+        ahdr.pack(fill="x")
+        self._np_label(ahdr, "音频链路", "text2", 9, True).pack(side="left")
+        self.np_audio_verdict = self._np_label(ahdr, "等待曲目…", "text2", 10, True)
+        self.np_audio_verdict.pack(side="right")
+        self.np_audio_spec = self._np_label(ain, "—", "text", 10)
+        self.np_audio_spec.pack(fill="x", pady=(7, 2))
+        self.np_audio_out = self._np_label(ain, "实际解码：—", "text2", 9)
+        self.np_audio_out.pack(fill="x")
+        self.np_audio_note = self._np_label(ain, "", "text3", 9)
+        self.np_audio_note.configure(anchor="w", justify="left", wraplength=640)
+        self.np_audio_note.pack(fill="x", pady=(3, 0))
+
         vbar = ttk.Frame(right)
         vbar.pack(fill="x", pady=(8, 4))
         self.np_view_var = tk.StringVar(value="lyrics")
         for key, text in (("lyrics", "歌词"), ("detail", "专辑详情"),
-                          ("viz", "可视化")):
+                          ("bio", "歌手 / 专辑简介")):
             ttk.Radiobutton(vbar, text=text, value=key,
                             variable=self.np_view_var,
                             command=lambda k=key: self._np_switch_view(k)
                             ).pack(side="left", padx=(0, 12))
+        ttk.Button(vbar, text="⛶ 专注大屏", style="Tool.TButton",
+                   command=self._focus_open).pack(side="right")
         self.np_src_lbl = ttk.Label(right, text=self._np_src_text,
                                     style="Rec.TLabel", anchor="w")
         self.np_src_lbl.pack(fill="x", pady=(2, 3))
@@ -2907,20 +3070,22 @@ class App(tk.Tk):
         self._attach_wheel(self.np_detail_text, self.np_detail_text)
         self.np_detail_text.insert("1.0", "（等待曲目信息）")
 
-        self.np_view_viz = ttk.Frame(self.np_view_host)
-        self.np_viz_canvas = tk.Canvas(self.np_view_viz, height=240,
-                                       highlightthickness=0)
-        self.np_viz_canvas.pack(fill="both", expand=True, pady=(4, 0))
-        ttk.Label(self.np_view_viz,
-                  text="装饰性节奏动画 · 音频由 squeezelite 输出，本 APP 不采集 PCM，非真实 FFT 频谱",
-                  style="Hint.TLabel", anchor="w").pack(fill="x", pady=(4, 0))
+        self.np_view_bio = ttk.Frame(self.np_view_host)
+        self.np_bio_text = tk.Text(self.np_view_bio, height=11, wrap="word",
+                                   font=self.small_font, **self._text_opts(False))
+        self.np_bio_text.pack(fill="both", expand=True)
+        self.np_bio_text.configure(state="disabled")
+        self._attach_wheel(self.np_bio_text, self.np_bio_text)
+        self._np_bio_tags()
+        ttk.Button(self.np_view_bio, text="重新获取简介", style="Tool.TButton",
+                   command=lambda: self._np_bio_load(True)
+                   ).pack(anchor="e", pady=(4, 0))
 
         self._np_switch_view("lyrics")
         self._np_apply_lyric_tags()
         self._np_after_theme()
         self._np_set_cover_placeholder("无封面")
         self.after(400, self._np_refresh_players)
-        self.after(200, self._np_viz_tick)
 
     def _np_apply_lyric_tags(self):
         C = self.C
@@ -2986,6 +3151,7 @@ class App(tk.Tk):
         self.np_artist.configure(text=tr.get("artist") or "未知艺术家")
         self.np_album.configure(text=tr.get("album") or "未知专辑")
         self._np_render_detail(tr)
+        self._np_render_audio(tr, st)
         dur, pos = st.get("duration") or 0.0, st.get("time") or 0.0
         self.np_prog.configure(value=(min(100.0, pos / dur * 100.0) if dur > 0 else 0))
         label = {"play": "播放中", "pause": "已暂停", "stop": "已停止"}.get(
@@ -3010,11 +3176,16 @@ class App(tk.Tk):
             self._np_async_extras(tr, tr.get("coverid", ""),
                                   tr.get("artwork_url", ""))
         self._np_highlight(pos, force=True)
+        if self.np_view == "bio":
+            self._np_bio_load()
+        if self.focus_win is not None:
+            self._focus_update()
 
     def _np_async_extras(self, track, coverid, artwork_url):
         key = self.np_track_key
         pid = (self.np_player or {}).get("id", "")
         cfg = dict(self.cfg)
+        pad = self.C["surface2"]
 
         def worker():
             try:
@@ -3032,7 +3203,8 @@ class App(tk.Tk):
                     except Exception:
                         pass
                     data = http_request(url, headers=ch or None, timeout=8)
-                    png = decode_cover_png(data, 280)
+                    png = decode_cover_png(data, 280, square=True,
+                                          pad_color=pad)
                     self.q.put(("np_cover", {"key": key, "url": url, "png": png}))
             except Exception:
                 pass
@@ -3244,18 +3416,23 @@ class App(tk.Tk):
                 self._np_poll_once()
         except Exception as e:
             self._log("Now Playing 轮询异常: %s" % str(e)[:110])
+        if getattr(self, "focus_win", None) is not None:
+            try:
+                self._focus_update()
+            except Exception:
+                pass
         self.after(500, self._np_tick)
 
     def _np_switch_view(self, name):
-        self.np_view = name if name in ("lyrics", "detail", "viz") else "lyrics"
-        for fr in (self.np_view_lyrics, self.np_view_detail, self.np_view_viz):
+        self.np_view = name if name in ("lyrics", "detail", "bio") else "lyrics"
+        for fr in (self.np_view_lyrics, self.np_view_detail, self.np_view_bio):
             try:
                 fr.pack_forget()
             except Exception:
                 pass
         target = {"lyrics": self.np_view_lyrics,
                   "detail": self.np_view_detail,
-                  "viz": self.np_view_viz}[self.np_view]
+                  "bio": self.np_view_bio}[self.np_view]
         target.pack(fill="both", expand=True)
         try:
             self.np_view_var.set(self.np_view)
@@ -3267,23 +3444,30 @@ class App(tk.Tk):
             elif self.np_view == "detail":
                 self.np_src_lbl.configure(text="专辑详情 · 由 LMS 标签提供")
             else:
-                self.np_src_lbl.configure(text="可视化 · 装饰性节奏动画")
+                self.np_src_lbl.configure(
+                    text="歌手 / 专辑简介 · LMS 标签 + 维基百科")
         except Exception:
             pass
-        if self.np_view == "viz":
-            self._np_viz_redraw()
+        if self.np_view == "bio":
+            self._np_bio_load()
 
     def _np_after_theme(self):
         C = self.C
         try:
+            for c in getattr(self, "np_cards", ()):
+                c.configure(highlightbackground=C["border"])
+            self.np_cover_box.configure(highlightbackground=C["border"])
             self.np_cover_lbl.configure(background=C["surface2"],
                                         foreground=C["text3"])
             self.np_lyr_text.configure(**self._text_opts(False))
             self.np_detail_text.configure(**self._text_opts(False))
-            self.np_viz_canvas.configure(background=C["surface2"])
+            self.np_bio_text.configure(**self._text_opts(False))
             self._np_apply_lyric_tags()
-            if self.np_view == "viz":
-                self._np_viz_redraw()
+            self._np_bio_tags()
+            if self.np_audio_data:
+                self._np_render_audio(*self.np_audio_data)
+            if self.focus_win is not None:
+                self._focus_theme()
         except Exception:
             pass
 
@@ -3297,39 +3481,367 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _np_viz_tick(self):
-        if not getattr(self, "_viz_alive", False):
-            return
+    # ------------------------------------------------ 音频链路 / 直通判定
+    def _np_render_audio(self, tr, st):
+        spec = audio_spec(tr)
+        sl = getattr(self, "sl_output", {}) or {}
+        proc = getattr(self, "proc", None)
+        owned = bool(proc and proc.poll() is None)
+        level, title, note = audio_link_verdict(spec, st, sl, owned)
+        self.np_audio_data = (dict(tr), dict(st))
+        C = self.C
+        color = {"ok": "ok", "warn": "warn",
+                 "unknown": "text2"}.get(level, "text2")
+        mark = {"ok": "✓ ", "warn": "⚠ "}.get(level, "◇ ")
         try:
-            if self.np_view == "viz":
-                self._np_viz_redraw()
+            self.np_audio_verdict._sq_fg = color
+            self.np_audio_verdict.configure(text=mark + title,
+                                            foreground=C[color])
+            self.np_audio_spec.configure(
+                text="%s   ·   %s   ·   %s   ·   %s" % (
+                    spec["format"], spec["rate"], spec["bits"],
+                    spec["bitrate"]))
+            out = dict(sl or {})
+            if out.get("rate"):
+                txt = "实际解码：%s%s" % (
+                    (out.get("format") + " · ") if out.get("format") else "",
+                    fmt_sl_rate(out["rate"]))
+                if out.get("note") and not out.get("converted"):
+                    txt += "（%s）" % out["note"]
+            else:
+                txt = "实际解码：未读取到 squeezelite 输出日志"
+            if not owned:
+                txt += "   ·   播放器未由本 APP 启动"
+            self.np_audio_out.configure(text=txt)
+            self.np_audio_note.configure(text=note)
         except Exception:
             pass
-        self.after(90, self._np_viz_tick)
 
-    def _np_viz_redraw(self):
-        c = self.np_viz_canvas
+    # ------------------------------------------------ 歌手 / 专辑简介
+    def _np_bio_tags(self):
         C = self.C
+        t = self.np_bio_text
         try:
-            w = max(200, c.winfo_width())
-            h = max(120, c.winfo_height())
-            c.delete("all")
-            c.configure(background=C["surface2"])
-            n = 32
-            gap = 4
-            bw = max(2.0, (w - gap * (n + 1)) / float(n))
-            vals = viz_frame(time.monotonic(), self.np_mode == "play",
-                             n, self.np_viz_seed)
-            for i, v in enumerate(vals):
-                x0 = gap + i * (bw + gap)
-                x1 = x0 + bw
-                bh = (h - 18) * v
-                y0, y1 = h - 9 - bh, h - 9
-                c.create_rectangle(x0, y0, x1, y1,
-                                   fill=C["primary"] if i % 3 else C["accent"],
-                                   outline="")
-                c.create_rectangle(x0, y1 - 3, x1, y1,
-                                   fill=C["primary_dark"], outline="")
+            t.tag_configure("h", font=(self.fam, 12, "bold"),
+                            foreground=C["primary"], spacing1=8, spacing3=4)
+            t.tag_configure("b", font=self.ui_font, foreground=C["text"],
+                            spacing1=2)
+            t.tag_configure("m", font=self.small_font, foreground=C["text3"])
+        except Exception:
+            pass
+
+    def _np_bio_show(self, msg, tags=("b",)):
+        t = self.np_bio_text
+        try:
+            t.configure(state="normal")
+            t.delete("1.0", "end")
+            t.insert("1.0", msg, tags)
+            t.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _np_bio_load(self, force=False):
+        tr = dict(self.np_detail or {})
+        artist = str(tr.get("artist") or "").strip()
+        album = str(tr.get("album") or "").strip()
+        if not (artist or album):
+            self._np_bio_show("（等待曲目信息）", ("m",))
+            return
+        key = "%s|%s" % (artist, album)
+        if not force and key == self.np_bio_key and any(self.np_bio_cache[:2]):
+            self._np_render_bio(tr, *self.np_bio_cache)
+            return
+        cfg = dict(self.cfg)
+        self._np_bio_show("正在获取歌手 / 专辑简介…", ("m",))
+
+        def worker():
+            try:
+                a, b, s = bio_fetch(cfg, artist, album, force)
+                self.q.put(("np_bio", {"key": key, "artist": a,
+                                       "album": b, "src": s}))
+            except Exception:
+                self.q.put(("np_bio", {"key": key, "artist": "",
+                                       "album": "", "src": "获取失败"}))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_on_bio(self, d):
+        tr = dict(self.np_detail or {})
+        key = "%s|%s" % (str(tr.get("artist") or "").strip(),
+                         str(tr.get("album") or "").strip())
+        if d.get("key") != key:
+            return
+        self.np_bio_key = key
+        self.np_bio_cache = (d.get("artist") or "", d.get("album") or "",
+                             d.get("src") or "")
+        self._np_render_bio(tr, *self.np_bio_cache)
+
+    def _np_render_bio(self, tr, a_txt, b_txt, src):
+        t = self.np_bio_text
+        artist = str(tr.get("artist") or "未知艺术家").strip()
+        album = str(tr.get("album") or "未知专辑").strip()
+        try:
+            t.configure(state="normal")
+            t.delete("1.0", "end")
+            t.insert("end", "歌手 · %s\n" % artist, "h")
+            t.insert("end", (str(a_txt).strip() or "（暂无在线简介）") + "\n\n", "b")
+            t.insert("end", "专辑 · %s\n" % album, "h")
+            t.insert("end", (str(b_txt).strip() or "（暂无在线简介）") + "\n\n", "b")
+            t.insert("end", "LMS 专辑信息\n", "h")
+            meta = []
+            for k, label in (("year", "年份"), ("genre", "流派"),
+                             ("composer", "作曲"), ("tracknum", "音轨"),
+                             ("duration", "时长")):
+                v = tr.get(k)
+                if v and str(v) not in ("0", "-1"):
+                    meta.append("%s %s" % (
+                        label, fmt_sec(v) if k == "duration" else v))
+            t.insert("end", ("  ·  ".join(meta) if meta else
+                             "（LMS 未返回更多标签）") + "\n\n", "b")
+            t.insert("end", "简介来源：%s\n" % (src or "—"), "m")
+            t.insert("end", "LMS 未安装 Music & Artist Information 插件时，"
+                            "长篇简介取自维基百科；专辑信息始终由 LMS 标签提供。\n"
+                            "本 APP 不做真实 FFT：PCM 由 LMS 经 Slimproto 直送 "
+                            "squeezelite，不经过本 APP，且 macOS 无原生回环采集。\n", "m")
+            t.configure(state="disabled")
+        except Exception:
+            pass
+
+    # ------------------------------------------------ 专注大屏模式
+    def _focus_label(self, parent, text, fg="text", size=12, bold=False):
+        C = self.C
+        l = tk.Label(parent, text=text, background=C["bg"], foreground=C[fg],
+                     font=(self.fam, size, "bold") if bold else (self.fam, size),
+                     anchor="w")
+        l._sq_bg = "bg"
+        l._sq_fg = fg
+        return l
+
+    def _focus_open(self):
+        win = getattr(self, "focus_win", None)
+        if win is not None:
+            try:
+                win.lift()
+                win.focus_force()
+                return
+            except Exception:
+                self.focus_win = None
+        C = self.C
+        win = tk.Toplevel(self)
+        self.focus_win = win
+        self.focus_photo = None
+        win.configure(background=C["bg"])
+        try:
+            win.attributes("-fullscreen", True)
+        except Exception:
+            pass
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        win.bind("<Escape>", lambda e: self._focus_close())
+        win.bind("<Motion>", lambda e: self._focus_motion())
+
+        wrap = tk.Frame(win, background=C["bg"])
+        wrap._sq_bg = "bg"
+        wrap.pack(fill="both", expand=True, padx=70, pady=44)
+
+        top = tk.Frame(wrap, background=C["bg"])
+        top._sq_bg = "bg"
+        top.pack(fill="x")
+        self.focus_hint = self._focus_label(
+            top, "专注模式 · 移动鼠标显示退出按钮 · ESC 退出", "text3", 10)
+        self.focus_hint.pack(side="left")
+        self.focus_exit = tk.Button(
+            top, text="✕  退出专注模式", command=self._focus_close,
+            relief="flat", bd=0, background=C["surface"],
+            foreground=C["text"], activebackground=C["primary_dark"],
+            activeforeground=C["on_app_bar"], font=(self.fam, 11, "bold"),
+            padx=18, pady=8, cursor="hand2")
+        self.focus_exit._sq_bg = "surface"
+        self.focus_exit._sq_fg = "text"
+        self.focus_exit.pack(side="right")
+
+        main = tk.Frame(wrap, background=C["bg"])
+        main._sq_bg = "bg"
+        main.pack(fill="both", expand=True, pady=28)
+        cover = tk.Frame(main, background=C["surface2"], width=420, height=420,
+                         highlightbackground=C["border"], highlightthickness=1)
+        cover._sq_bg = "surface2"
+        cover.pack(side="left", padx=(0, 48))
+        cover.pack_propagate(False)
+        self.focus_cover_box = cover
+        self.focus_cover = tk.Label(cover, text="无封面", anchor="center",
+                                    justify="center", background=C["surface2"],
+                                    foreground=C["text3"])
+        self.focus_cover._sq_bg = "surface2"
+        self.focus_cover._sq_fg = "text3"
+        self.focus_cover.pack(fill="both", expand=True)
+
+        info = tk.Frame(main, background=C["bg"])
+        info._sq_bg = "bg"
+        info.pack(side="left", fill="both", expand=True)
+        self.focus_title = self._focus_label(info, "—", "text", 26, True)
+        self.focus_title.configure(wraplength=620, justify="left")
+        self.focus_title.pack(anchor="w", pady=(30, 8))
+        self.focus_artist = self._focus_label(info, "", "text2", 15)
+        self.focus_artist.configure(wraplength=620, justify="left")
+        self.focus_artist.pack(anchor="w")
+        self.focus_album = self._focus_label(info, "", "text3", 12)
+        self.focus_album.configure(wraplength=620, justify="left")
+        self.focus_album.pack(anchor="w", pady=(4, 24))
+        self.focus_lyric = self._focus_label(info, "", "primary", 18)
+        self.focus_lyric.configure(wraplength=620, justify="center")
+        self.focus_lyric.pack(fill="both", expand=True, pady=10)
+
+        bottom = tk.Frame(wrap, background=C["bg"])
+        bottom._sq_bg = "bg"
+        bottom.pack(fill="x")
+        self.focus_prog = ttk.Progressbar(bottom, mode="determinate", maximum=100)
+        self.focus_prog.pack(fill="x", pady=(0, 6))
+        brow = tk.Frame(bottom, background=C["bg"])
+        brow._sq_bg = "bg"
+        brow.pack(fill="x")
+        ttk.Button(brow, text="◀ 上一首", style="Tool.TButton",
+                   command=lambda: self._np_cmd(["playlist", "index", "-1"])
+                   ).pack(side="left", padx=3)
+        ttk.Button(brow, text="播放 / 暂停", style="Accent.TButton",
+                   command=self._np_toggle).pack(side="left", padx=3)
+        ttk.Button(brow, text="下一首 ▶", style="Tool.TButton",
+                   command=lambda: self._np_cmd(["playlist", "index", "+1"])
+                   ).pack(side="left", padx=3)
+        self.focus_time = self._focus_label(brow, "0:00 / 0:00", "text2", 11)
+        self.focus_time.pack(side="right")
+
+        self._focus_last_motion = time.monotonic()
+        self.after(500, self._focus_hide_tick)
+        self._focus_update()
+        self._focus_cover_async()
+
+    def _focus_motion(self):
+        self._focus_last_motion = time.monotonic()
+        try:
+            if self.focus_exit.winfo_manager() != "pack":
+                self.focus_exit.pack(side="right")
+        except Exception:
+            pass
+
+    def _focus_hide_tick(self):
+        if getattr(self, "focus_win", None) is None:
+            return
+        try:
+            if (time.monotonic() - getattr(self, "_focus_last_motion", 0)) > 3.0:
+                if self.focus_exit.winfo_manager() == "pack":
+                    self.focus_exit.pack_forget()
+        except Exception:
+            pass
+        self.after(500, self._focus_hide_tick)
+
+    def _focus_close(self):
+        win = getattr(self, "focus_win", None)
+        self.focus_win = None
+        self.focus_photo = None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        try:
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _focus_theme(self):
+        win = getattr(self, "focus_win", None)
+        if win is None:
+            return
+        try:
+            self._retheme_tk(win)
+            C = self.C
+            self.focus_cover_box.configure(highlightbackground=C["border"])
+            self.focus_exit.configure(activebackground=C["primary_dark"],
+                                      activeforeground=C["on_app_bar"])
+        except Exception:
+            pass
+
+    def _focus_cover_async(self):
+        tr = dict(self.np_detail or {})
+        cid = ""
+        for k in ("coverid", "artwork_track_id", "artwork_url"):
+            v = str(tr.get(k) or "").strip()
+            if v and v not in ("0", "-1"):
+                cid = v
+                break
+        if not cid:
+            return
+        cfg = dict(self.cfg)
+        pad = self.C["surface2"]
+
+        def worker():
+            try:
+                is_url = cid.startswith("http")
+                url = np_cover_url(cfg, "" if is_url else cid,
+                                   cid if is_url else "")
+                if not url:
+                    return
+                ch = {}
+                try:
+                    if url.startswith(lms_base(cfg)):
+                        ch = lms_auth_headers(cfg)
+                except Exception:
+                    pass
+                data = http_request(url, headers=ch or None, timeout=8)
+                png = decode_cover_png(data, 420, square=True, pad_color=pad)
+                if png:
+                    self.q.put(("focus_cover", png))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _focus_on_cover(self, png):
+        if getattr(self, "focus_win", None) is None:
+            return
+        try:
+            import base64
+            self.focus_photo = tk.PhotoImage(
+                data=base64.b64encode(png).decode("ascii"))
+            self.focus_cover.configure(image=self.focus_photo, text="",
+                                       background=self.C["surface2"])
+        except Exception:
+            pass
+
+    def _focus_update(self):
+        if getattr(self, "focus_win", None) is None:
+            return
+        tr = dict(self.np_detail or {})
+        try:
+            self.focus_title.configure(text=tr.get("title") or "—")
+            self.focus_artist.configure(text=tr.get("artist") or "未知艺术家")
+            self.focus_album.configure(text=tr.get("album") or "")
+            try:
+                dur = float(tr.get("duration") or 0)
+            except Exception:
+                dur = 0.0
+            pos = self.np_time
+            if self.np_time_at:
+                pos += time.monotonic() - self.np_time_at
+            if dur > 0:
+                self.focus_prog.configure(value=min(100.0, pos / dur * 100.0))
+                self.focus_time.configure(
+                    text="%s / %s" % (fmt_sec(pos), fmt_sec(dur)))
+            txt = ""
+            if self.np_timed and self.np_lrc["lines"]:
+                i = max(0, self.np_cur_line)
+                if i < len(self.np_lrc["lines"]):
+                    txt = self.np_lrc["lines"][i][1]
+            elif self.np_lyrics:
+                txt = "♪  播放中"
+            self.focus_lyric.configure(text=txt)
+            if getattr(self, "focus_photo", None) is not None:
+                self.focus_cover.configure(image=self.focus_photo, text="",
+                                           background=self.C["surface2"])
+            elif getattr(self, "np_photo", None) is not None:
+                self.focus_cover.configure(image=self.np_photo, text="",
+                                           background=self.C["surface2"])
         except Exception:
             pass
 
@@ -3866,6 +4378,7 @@ class App(tk.Tk):
             self._lib_set_cover_placeholder("无封面")
             return
         cfg = dict(self.cfg)
+        pad = self.C["surface2"]
 
         def worker():
             try:
@@ -3882,7 +4395,9 @@ class App(tk.Tk):
                     pass
                 data = http_request(url, headers=ch or None, timeout=8)
                 self.q.put(("lib_cover", {"key": key,
-                                          "png": decode_cover_png(data, 272)}))
+                                          "png": decode_cover_png(
+                                              data, 272, square=True,
+                                              pad_color=pad)}))
             except Exception:
                 pass
         threading.Thread(target=worker, daemon=True).start()
@@ -3906,6 +4421,7 @@ class App(tk.Tk):
     def _lib_thumbs(self, items):
         req = self.lib_req
         cfg = dict(self.cfg)
+        pad = self.C["surface2"]
         jobs = []
         for n, it in enumerate(items[:60]):
             cid = lib_cover_id(it)
@@ -3927,7 +4443,8 @@ class App(tk.Tk):
                 except Exception:
                     pass
                 data = http_request(url, headers=ch or None, timeout=5)
-                png = decode_cover_png(data, 44)
+                png = decode_cover_png(data, 44, square=True,
+                                       pad_color=pad)
                 if png:
                     return (iid, png)
             except Exception:
@@ -4037,18 +4554,15 @@ class App(tk.Tk):
             "深色" if name == "dark" else "浅色"))
 
     def _theme_seg_update(self):
-        """分段按钮：选中项反色胶囊，其余融入 app bar。"""
-        C = self.C
+        """分段按钮：选中项反色胶囊，其余融入 app bar。ttk 样式自绘。"""
         cur = ("跟随系统" if self.theme_mode == "system" else
                ("深色" if self.theme_name == "dark" else "浅色"))
         for label, b in getattr(self, "theme_segs", {}).items():
-            on = (label == cur)
-            b.configure(
-                background=C["on_app_bar"] if on else C["app_bar"],
-                foreground=C["app_bar"] if on else C["on_app_bar"],
-                activebackground=C["on_app_bar"] if on else C["primary_dark"],
-                activeforeground=C["app_bar"] if on else C["on_app_bar"],
-                font=(self.fam, 10, "bold") if on else (self.fam, 10))
+            try:
+                b.configure(style=("ThemeSegOn.TLabel" if label == cur
+                                   else "ThemeSeg.TLabel"))
+            except Exception:
+                pass
         try:
             self.theme_mode_var.set(cur)
         except Exception:
@@ -4317,7 +4831,7 @@ def lib_browse(cfg, mode, start=0, count=50, query="", filters=None):
         # a=艺术家 l=专辑 j=artwork_track_id（小写 j 才返回封面标识）
         args.append("tags:alj")
     elif mode == "titles":
-        args.append("tags:alcKdtu")
+        args.append("tags:alcKdtuIro")
     for f in (filters or []):
         if f:
             args.append(str(f))
@@ -4408,20 +4922,307 @@ def detail_lines(track):
         out.append("%s：\t%s" % (k, str(v)))
     return "\n".join(out) if out else "（暂无详情，LMS 未返回更多标签）"
 
-def viz_frame(t, playing=True, n=32, seed=0.0):
-    """确定性生成的装饰性频谱柱高（0..1）；音频不经过本 APP，非真实 FFT。"""
-    import math
-    out = []
-    for i in range(n):
-        base = 0.26 + 0.20 * math.sin(t * 2.1 + i * 0.55 + seed)
-        beat = 0.22 * max(0.0, math.sin(t * 5.2 + i * 0.17))
-        h = math.sin((i + 1) * 12.9898 + t * 7.3 + seed * 3.1) * 43758.5453
-        noise = 0.20 * (h - math.floor(h))
-        v = base + beat + noise
-        if not playing:
-            v *= 0.25
-        out.append(max(0.04, min(1.0, v)))
-    return out
+# ---------------------------------------------------------------- v1.5.0 helpers
+BIO_CACHE_PATH = os.path.join(CONFIG_DIR, "bio_cache.json")
+_WIKI_UA = "SqueezeliteGUI/1.5 (local desktop application)"
+
+AUDIO_FORMAT_MAP = (
+    (".dsf", "DSD (DSF)"), (".dff", "DSD (DFF)"), (".dsd", "DSD"),
+    (".iso", "SACD ISO (DSD)"), (".flac", "FLAC"), (".wav", "WAV / PCM"),
+    (".aiff", "AIFF / PCM"), (".aif", "AIFF / PCM"), (".pcm", "PCM"),
+    (".alac", "ALAC"), (".m4a", "AAC / ALAC"), (".aac", "AAC"),
+    (".mp3", "MP3"), (".ogg", "Ogg Vorbis"), (".opus", "Opus"),
+    (".ape", "Monkey's Audio"), (".wv", "WavPack"), (".mpc", "Musepack"),
+)
+_DSD_EXT = (".dsf", ".dff", ".dsd", ".iso")
+
+# LMS 的 type 字段（如 flc / mp3 / dsf）。url 被 LMS 重写或无扩展名时兜底。
+LMS_TYPE_MAP = {
+    "flc": "FLAC", "flac": "FLAC",
+    "wav": "WAV / PCM", "aif": "AIFF / PCM", "aiff": "AIFF / PCM",
+    "pcm": "PCM", "mp3": "MP3", "ogg": "Ogg Vorbis", "oga": "Ogg Vorbis",
+    "opus": "Opus", "mp4": "AAC / ALAC", "m4a": "AAC / ALAC",
+    "aac": "AAC", "alc": "ALAC", "alac": "ALAC",
+    "dsf": "DSD (DSF)", "dff": "DSD (DFF)", "dsd": "DSD",
+    "sacd": "SACD ISO (DSD)", "ape": "Monkey's Audio",
+    "wv": "WavPack", "wvp": "WavPack", "mpc": "Musepack", "wma": "WMA",
+}
+
+
+def _int_or_zero(v):
+    try:
+        return int(float(v))
+    except Exception:
+        return 0
+
+
+def audio_spec(track):
+    """从 LMS status 标签解析【源文件】音频规格（不是实际解码输出）。"""
+    t = track or {}
+    url = str(t.get("url") or "")
+    path = url.split("#")[0].split("?")[0]
+    try:
+        path = urllib.parse.unquote(path)
+    except Exception:
+        pass
+    ext = os.path.splitext(path)[1].lower()
+    typ = str(t.get("type") or "").strip().lower()
+    fmt = ""
+    for e, label in AUDIO_FORMAT_MAP:
+        if ext == e:
+            fmt = label
+            break
+    if not fmt:
+        # url 被 LMS 重写或没有扩展名时，用 LMS 的 type 字段兜底
+        fmt = LMS_TYPE_MAP.get(typ, "")
+    if not fmt:
+        fmt = ((ext.lstrip(".").upper() + "（未知）") if ext else
+               (typ.upper() + "（LMS）" if typ else "未知格式"))
+    is_dsd = (ext in _DSD_EXT or fmt.startswith("DSD") or "SACD" in fmt
+              or typ in ("dsf", "dff", "dsd", "sacd"))
+    sr = _int_or_zero(t.get("samplerate"))
+    if sr and is_dsd:
+        dsd_n = max(64, int(round(sr / 2822400.0)) * 64)
+        rate = "DSD%d · %.4f MHz" % (dsd_n, sr / 1000000.0)
+    elif sr:
+        rate = "%.1f kHz" % (sr / 1000.0)
+    else:
+        rate = "—"
+    if is_dsd:
+        bits = "1 bit"
+    else:
+        ss = str(t.get("samplesize") or "").strip()
+        bits = (ss if ss.lower().endswith("bit") else ss + " bit") if ss else "—"
+    size = _int_or_zero(t.get("filesize"))
+    try:
+        dur = float(t.get("duration") or 0)
+    except Exception:
+        dur = 0.0
+    kbps = int(size * 8 / dur / 1000) if size > 0 and dur > 1 else 0
+    rep_rate = str(t.get("bitrate") or "").strip()
+    if rep_rate and rep_rate not in ("0", "-1", "0kbps", "0 kbps"):
+        # LMS 报告值优先（如 "815kbps VBR"），比按文件大小推算更准确
+        bitrate = rep_rate
+    elif kbps >= 1000:
+        bitrate = "%.2f Mbps" % (kbps / 1000.0)
+    elif kbps:
+        bitrate = "%d kbps" % kbps
+    else:
+        bitrate = "—"
+    return {"format": fmt, "rate": rate, "rate_hz": sr, "bits": bits,
+            "bitrate": bitrate, "is_dsd": is_dsd, "ext": ext,
+            "filesize": size, "duration": dur}
+
+
+def parse_sl_output(line, state=None):
+    """解析 squeezelite -d output=info 日志，得到【实际解码/输出】状态。"""
+    s = dict(state or {})
+    s.setdefault("rate", 0)
+    s.setdefault("dsd", 0)
+    s.setdefault("format", "")
+    s.setdefault("converted", False)
+    s.setdefault("note", "")
+    low = str(line)
+    m = re.search(
+        r"DSD[ ]*([0-9]+)[ ]+stream,[ ]*format:[ ]*([^,]+),[ ]*rate:[ ]*([0-9]+)[ ]*Hz",
+        low, re.I)
+    if m:
+        s["dsd"] = int(m.group(1))
+        s["format"] = "DSD" + m.group(1)
+        s["rate"] = int(m.group(3))
+        s["converted"] = False
+        s["note"] = m.group(2).strip()
+        return s, True
+    m = re.search(r"track start sample rate:[ ]*([0-9]+)", low, re.I)
+    if m:
+        s["rate"] = int(m.group(1))
+        s["dsd"] = 0
+        s["format"] = "PCM"
+        s["converted"] = False
+        return s, True
+    m = re.search(r"sample rate:[ ]*([0-9]+)", low, re.I)
+    if m:
+        s["rate"] = int(m.group(1))
+        return s, True
+    if "converting to PCM" in low:
+        s["converted"] = True
+        s["note"] = "设备不支持该 DSD 速率，已转换为 PCM"
+        return s, True
+    if "not supported" in low and "sample rate" in low:
+        s["converted"] = True
+        s["note"] = "采样率不受输出设备支持"
+        return s, True
+    if "rates differ" in low:
+        s["converted"] = True
+        s["note"] = "相邻曲目采样率不同，已跳过淡入淡出"
+        return s, True
+    return s, False
+
+
+def fmt_sl_rate(hz):
+    hz = int(hz or 0)
+    if not hz:
+        return "—"
+    if hz >= 1000000:
+        return "%.4f MHz" % (hz / 1000000.0)
+    return "%.1f kHz" % (hz / 1000.0)
+
+
+def audio_link_verdict(spec, st, sl, app_owned):
+    """直通判定，返回 (等级, 标题, 说明)；等级 ok / warn / unknown。"""
+    src_rate = int(spec.get("rate_hz") or 0)
+    try:
+        vol = int(float(st.get("volume")))
+    except Exception:
+        vol = 100
+    rate = st.get("rate", 1)
+    out = dict(sl or {})
+    out_rate = int(out.get("rate") or 0)
+    converted = bool(out.get("converted"))
+    if converted:
+        return ("warn", "已转码 / 重采样",
+                out.get("note") or "squeezelite 输出日志显示格式或采样率发生了变化")
+    if out_rate and src_rate and out_rate != src_rate:
+        return ("warn", "已重采样",
+                "源 %s → 实际输出 %s" % (fmt_sl_rate(src_rate), fmt_sl_rate(out_rate)))
+    if out_rate and src_rate and out_rate == src_rate:
+        same = "输出采样率与源文件一致（%s）" % fmt_sl_rate(out_rate)
+    elif out_rate:
+        same = "实际输出采样率 %s" % fmt_sl_rate(out_rate)
+    else:
+        same = "未读到 squeezelite 实际输出采样率"
+    if vol != 100:
+        return ("warn", "数字音量介入",
+                "LMS 音量为 %s（非 100），会改动 PCM 数据，非 bit-perfect" % vol)
+    try:
+        rate_f = float(rate)
+    except Exception:
+        rate_f = 1.0
+    if rate_f != 1.0:
+        return ("warn", "非 1 倍速播放", "播放速率 %s，非正常直通" % rate)
+    if out_rate and src_rate and out_rate == src_rate:
+        return ("ok", "完美直通（bit-perfect）",
+                "%s · 音量 100 · 1 倍速（依据 squeezelite 输出日志）" % same)
+    if out_rate:
+        return ("ok", "未发现转码迹象",
+                "%s · 音量 100 · 1 倍速（源采样率未由 LMS 报告）" % same)
+    return ("unknown", "待确认（以播放器输出为准）",
+            "%s；%s" % (same,
+              "播放器未开启 output 日志时，仅能显示 LMS 提供的源文件规格"
+              if app_owned else
+              "播放器未由本 APP 启动，无法读取 squeezelite 实际输出"))
+
+
+def bio_cache_load():
+    try:
+        with open(BIO_CACHE_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def bio_cache_save(d):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        tmp = BIO_CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, BIO_CACHE_PATH)
+        try:
+            os.chmod(BIO_CACHE_PATH, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def wiki_extract(title, lang="zh"):
+    if not title:
+        return ""
+    host = "zh.wikipedia.org" if lang == "zh" else "en.wikipedia.org"
+    q = urllib.parse.urlencode({
+        "action": "query", "prop": "extracts", "exintro": "1",
+        "explaintext": "1", "format": "json", "redirects": "1",
+        "titles": title})
+    url = "https://%s/w/api.php?%s" % (host, q)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _WIKI_UA})
+        with urllib.request.urlopen(req, timeout=7) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        pages = ((d.get("query") or {}).get("pages") or {})
+        for pg in pages.values():
+            txt = str(pg.get("extract") or "").strip()
+            if len(txt) >= 40:
+                return txt
+    except Exception:
+        pass
+    return ""
+
+
+def lms_plugin_bio(cfg, kind, name):
+    """仅在显式开启 bio_lms_plugin 时调用；未装插件的 LMS 会直接断连。"""
+    if not (cfg.get("bio_lms_plugin") and name):
+        return ""
+    cmd = [("artistinfo" if kind == "artist" else "albuminfo"), "0", "5",
+           ("artist:" if kind == "artist" else "album:") + name]
+    try:
+        r = lms_rpc(cfg, cmd, timeout=3, _id=44)
+        def longest(o, depth=0):
+            if depth > 4:
+                return ""
+            if isinstance(o, str):
+                return o.strip()
+            best = ""
+            if isinstance(o, dict):
+                for v in o.values():
+                    t = longest(v, depth + 1)
+                    if len(t) > len(best):
+                        best = t
+            elif isinstance(o, (list, tuple)):
+                for v in o:
+                    t = longest(v, depth + 1)
+                    if len(t) > len(best):
+                        best = t
+            return best
+        txt = longest(r)
+        return txt if len(txt) > 80 else ""
+    except Exception:
+        return ""
+
+
+def bio_fetch(cfg, artist, album="", force=False):
+    """返回 (artist_text, album_text, src_label)；结果带本地缓存。"""
+    artist = str(artist or "").strip()
+    album = str(album or "").strip()
+    key = "%s|%s" % (artist, album)
+    cache = bio_cache_load()
+    if not force and key in cache:
+        v = cache[key]
+        return v.get("artist", ""), v.get("album", ""), v.get("src", "")
+    a_txt = lms_plugin_bio(cfg, "artist", artist)
+    b_txt = lms_plugin_bio(cfg, "album", album)
+    a_src = "LMS 插件" if a_txt else ""
+    b_src = "LMS 插件" if b_txt else ""
+    if not a_txt:
+        for lang in ("zh", "en"):
+            a_txt = wiki_extract(artist, lang)
+            if a_txt:
+                a_src = "维基百科（%s）" % ("中文" if lang == "zh" else "英文")
+                break
+    if not b_txt and album:
+        for lang in ("zh", "en"):
+            b_txt = wiki_extract(album, lang)
+            if b_txt:
+                b_src = "维基百科（%s）" % ("中文" if lang == "zh" else "英文")
+                break
+    src = " · ".join(x for x in (a_src, b_src) if x) or "暂无在线简介"
+    cache[key] = {"artist": a_txt[:2000], "album": b_txt[:2000], "src": src}
+    if len(cache) > 300:
+        for k in list(cache.keys())[:-300]:
+            cache.pop(k, None)
+    bio_cache_save(cache)
+    return cache[key]["artist"], cache[key]["album"], src
 
 
 HELP_TEXT = """Squeezelite GUI · 使用说明
@@ -4430,7 +5231,7 @@ HELP_TEXT = """Squeezelite GUI · 使用说明
 （Lyrion Material 风格）；
 参数配置页、设备列表、版本列表、音乐库均支持鼠标滚轮上下滚动。
 
-【正在播放】（v1.3.0）
+【正在播放】（v1.3.0 起，v1.5.0 增强）
   先在「升级与更新」页填好 LMS 服务器地址；若 LMS 启用了密码保护
   （Basic Auth），还需在同一页填写用户名/密码，仅设置密码时用户名留空。
   曲目信息、专辑封面来自 LMS；本页不读本机音乐目录、不依赖任何挂载点。
@@ -4438,13 +5239,43 @@ HELP_TEXT = """Squeezelite GUI · 使用说明
   （LRCLIB / 网易云，带本地缓存）→ 手动载入本地 LRC。在线歌词由本 APP
   直接访问公网，不需要 LMS 安装任何插件，也不要求挂载音乐目录。
   带 [mm:ss.xx] 时间轴的歌词会随播放进度逐行高亮。
-  右侧可切换「歌词 / 专辑详情 / 可视化」三个视图：专辑详情展示 LMS
-  返回的流派、年份、音轨号、比特率、采样率、文件路径等全部标签；
-  可视化是装饰性节奏动画（音频由 squeezelite 输出，本 APP 不采集 PCM，
-  因此不是真实 FFT 频谱）。点「重新搜索在线歌词」可忽略缓存重试。
+  右侧可切换「歌词 / 专辑详情 / 歌手 / 专辑简介」三个视图：
+    · 歌词：LRC 时间轴随播放进度逐行高亮；「重新搜索在线歌词」忽略缓存重试；
+    · 专辑详情：LMS 返回的流派、年份、音轨号、比特率、采样率、路径等全部标签；
+    · 歌手 / 专辑简介：专辑元信息始终取自 LMS 标签，长篇简介取自维基百科
+      中 / 英文 API，结果缓存在 ~/.squeezelite_gui/bio_cache.json，可点
+      「重新获取简介」强制刷新。若 LMS 已安装并启用 Music & Artist
+      Information 类插件，可在 config.json 里把 bio_lms_plugin 设为 true，
+      改用插件返回的 artistinfo / albuminfo；未装插件时开启该项会被 LMS
+      断连，因此默认关闭。
+  本架构无法提供真实 FFT 频谱：PCM 由 LMS 经 Slimproto(3483) 直送
+  squeezelite，不经过本 APP，macOS 也无原生回环采集设备；因此已移除
+  原有的装饰性节奏动画视图，改为上述简介视图。
   遥控端（手机 / 网页）发起播放后，本页会自动更新，无需在此点播。
 
-【音乐库】（v1.4.0 · 阶段 2）
+【音频链路 / 完美直通判定】（v1.5.0）
+  正在播放页顶部「音频链路」卡片显示当前曲目的源格式（FLAC / WAV /
+  DSD / PCM / MP3 / AAC 等）、采样率、位深与码率，取自 LMS 的
+  status / songinfo 标签；DSD 另按 DSF / DFF 后缀与 DSD 速率标注。
+  请求已按真实 LMS 补齐 I(位深) / r(码率) / o(格式类型) 标签，
+  位深与码率优先用 LMS 报告值，缺失时才按文件大小与时长推算。
+  通过本 APP「▶ 启动」播放器时会自动追加 -d output=info，从 squeezelite
+  日志解析实际输出采样率、DSD 封装（DoP / native）与「converting to
+  PCM」等转换提示；再结合源 / 输出采样率、LMS 音量与播放速率，给出
+  「完美直通（bit-perfect）/ 未发现转码迹象 / 已转码 / 已重采样 /
+  数字音量介入 / 非 1 倍速 / 待确认」判定。
+  若播放器并非由本 APP 启动（独立遥控端或外部 squeezelite 进程），
+  无法读取其输出日志，卡片只显示 LMS 提供的源文件规格并标注「待确认」。
+  要真正做到 bit-perfect，LMS 端还需关闭该播放器的「音量固定 /
+  比特率限制 / 转码」，并使用无损音源。
+
+【专注大屏】（v1.5.0）
+  点正在播放页「⛶ 进入专注大屏」或视图栏「⛶ 专注大屏」进入全屏：
+  大尺寸正方形封面、大字歌词、曲目信息与播放进度 / 控制。按 ESC 退出；
+  移动鼠标会浮出「✕ 退出专注模式」按钮，静止约 3 秒后自动隐藏；
+  大屏配色随主窗口的浅色 / 深色 / 跟随系统主题同步刷新。
+
+【音乐库】（v1.4.0 起，v1.5.0 统一封面）
   可按专辑 / 艺术家 / 曲目 / 流派 / 播放列表分页浏览，输入关键词后
   回车或点「搜索」走 LMS 的 search: 过滤；列表带封面缩略图，
   选中一项右侧卡片显示大封面、标题与 LMS 返回的全部标签。
@@ -4453,6 +5284,8 @@ HELP_TEXT = """Squeezelite GUI · 使用说明
   曲目双击、或选中后点「▶ 播放此项」，通过
   playlistcontrol cmd:load 发送到当前播放器（需先在「正在播放」页选定）。
   所有请求自动携带 LMS 的用户名/密码。
+  v1.5.0 起专辑与曲目封面缩略图、详情大封面统一按正方形等比缩放后
+  居中补边输出，不再出现大小不一或变形。
 
 ================================================================================
 
