@@ -3,6 +3,35 @@
 本项目遵循语义化版本：发布时同步更新 `squeezelite_gui.py` 中的 `VERSION`
 常量，并打附注标签 `vX.Y.Z`。
 
+## v1.3.0 (2026-11-22) — 在线歌词、大封面、跟随系统、音乐库（阶段 2）
+
+- **歌词不再依赖 LMS 插件或本地挂载**：新增在线歌词源 LRCLIB
+  （`/api/get` 精确匹配 + `/api/search` 兜底，返回带时间轴的 `syncedLyrics`）
+  与网易云音乐备用源，结果缓存到 `~/.squeezelite_gui/lyrics_cache.json`。
+  获取优先级：LMS 内嵌歌词 `songinfo tags:w` → 在线歌词 → 手动载入本地 LRC；
+  「重新搜索在线歌词」可忽略缓存重试。LMS 端无需安装任何插件。
+  在线歌词按「带时间轴优先」挑选：LRCLIB 同步歌词 → 网易云 LRC → 任意
+  纯文本；例如 LRCLIB 把《月光》标为 instrumental 且无歌词时，会自动改用
+  网易云返回的带时间轴 LRC，保证逐行同步可用。
+  macOS 跟随系统以 `defaults read -g AppleInterfaceStyle` 为首选
+  （无需「自动化」授权），AppleScript 仅作兜底，避免权限违例 -10004。
+- **修复专辑封面过小**：原 `tk.Label(width=30, height=14)` 在含图片时按
+  **像素**解释，把 300px 封面压成 30×14。改为 280×280 固定容器 + 自适应
+  Label，封面按 280px 解码；新增「专辑详情 / 可视化」视图，与歌词三向切换。
+- **专辑详情**：`status` 请求扩展 tags，展示流派、年份、音轨号、比特率、
+  采样率、位深、文件格式、文件大小、文件路径等 LMS 返回的全部标签。
+- **可视化**：Canvas 绘制 32 条动态柱，随播放状态起伏。明确标注为装饰性
+  节奏动画 —— 音频由 squeezelite 输出，本 APP 不采集 PCM，非真实 FFT 频谱。
+- **主题跟随系统**：顶栏新增「浅色 / 深色 / 跟随系统」下拉，跟随系统通过
+  macOS AppleScript `appearance preferences` + `defaults`、Linux
+  `gsettings`、Windows 注册表检测，后台每 4 秒轮询并自动切换；手动切换
+  会自动切回手动模式。切主题时歌词高亮、可视化配色、音乐库行色同步刷新。
+- **音乐库（阶段 2）**：第 7 个标签页，支持专辑 / 艺术家 / 曲目 / 流派 /
+  播放列表分页浏览与 `search:` 关键词过滤；Treeview 带异步封面缩略图，
+  选中显示大封面与详情，点「播放此项」或双击通过 `playlistcontrol cmd:load`
+  发送到当前播放器。所有请求自动携带 LMS Basic Auth 凭据。
+- 文档：README 功能与歌词/音乐库章节、应用内帮助同步更新。
+
 ## v1.2.1 (2026-11-22) — 修复 LMS 密码保护下无法连接
 
 - 修复 LMS 启用 Basic Auth 时「正在播放」页完全空白：抽出统一的
