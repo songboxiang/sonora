@@ -50,7 +50,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -1483,20 +1483,26 @@ class App(tk.Tk):
 
     def _retheme_tk(self, w):
         # ttk 控件由 Style 自动更新，这里只刷新 tk 原生控件。
+        # 卡片式控件可用 _sq_bg / _sq_fg 标注期望的配色键，避免被刷成页面底色。
         C = self.C
         app_bar = getattr(self, "app_bar", None)
         try:
             cls = w.winfo_class()
+            bgk = getattr(w, "_sq_bg", None)
+            fgk = getattr(w, "_sq_fg", None)
             if cls == "Frame":
-                w.configure(background=C["app_bar"] if w is app_bar else C["bg"])
+                bg = C[bgk] if bgk in C else (C["app_bar"] if w is app_bar else C["bg"])
+                w.configure(background=bg)
             elif cls == "Label":
                 bar = (w.master is app_bar)
-                w.configure(background=C["app_bar"] if bar else C["bg"],
-                            foreground=C["on_app_bar"] if bar else C["text"])
+                bg = C[bgk] if bgk in C else (C["app_bar"] if bar else C["bg"])
+                fg = C[fgk] if fgk in C else (C["on_app_bar"] if bar else C["text"])
+                w.configure(background=bg, foreground=fg)
             elif cls == "Button":
                 bar = (w.master is app_bar)
-                w.configure(background=C["app_bar"] if bar else C["surface"],
-                            foreground=C["on_app_bar"] if bar else C["text"],
+                bg = C[bgk] if bgk in C else (C["app_bar"] if bar else C["surface"])
+                fg = C[fgk] if fgk in C else (C["on_app_bar"] if bar else C["text"])
+                w.configure(background=bg, foreground=fg,
                             activebackground=C["primary_dark"],
                             activeforeground=C["on_app_bar"],
                             relief="flat", bd=0)
@@ -1613,11 +1619,20 @@ class App(tk.Tk):
         style.configure("TButton", background=C["surface"],
                         foreground=C["text"], bordercolor=C["border"],
                         lightcolor=C["surface"], darkcolor=C["border"],
-                        font=(fam, 10), padding=(11, 6), relief="flat",
+                        font=(fam, 10), padding=(14, 7), relief="flat",
                         borderwidth=1)
         style.map("TButton",
                   background=[("pressed", C["sel"]), ("active", C["surface2"]),
                               ("disabled", C["bg"])],
+                  foreground=[("disabled", C["text3"])],
+                  bordercolor=[("focus", C["primary"])])
+        style.configure("Tool.TButton", background=C["surface"],
+                        foreground=C["text"], bordercolor=C["border"],
+                        lightcolor=C["surface"], darkcolor=C["border"],
+                        font=(fam, 10), padding=(7, 5), relief="flat",
+                        borderwidth=1)
+        style.map("Tool.TButton",
+                  background=[("pressed", C["sel"]), ("active", C["surface2"])],
                   foreground=[("disabled", C["text3"])],
                   bordercolor=[("focus", C["primary"])])
         style.configure("Accent.TButton", background=C["primary"],
@@ -1640,31 +1655,43 @@ class App(tk.Tk):
                         arrowcolor=C["text2"], bordercolor=C["border"],
                         lightcolor=C["surface"], darkcolor=C["border"],
                         padding=5, relief="flat", borderwidth=1)
-        style.map("TCombobox", fieldbackground=[("readonly", C["surface"])],
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", C["surface"]),
+                                   ("!disabled", C["surface"])],
+                  foreground=[("readonly", C["text"]),
+                              ("disabled", C["text3"])],
                   bordercolor=[("focus", C["primary"])],
-                  foreground=[("disabled", C["text3"])])
+                  arrowcolor=[("active", C["primary"])])
         self.option_add("*TCombobox*Listbox.background", C["surface"])
         self.option_add("*TCombobox*Listbox.foreground", C["text"])
         self.option_add("*TCombobox*Listbox.selectBackground", C["primary"])
         self.option_add("*TCombobox*Listbox.selectForeground", C["on_primary"])
         style.configure("TNotebook", background=C["bg"],
-                        bordercolor=C["border"], tabmargins=(8, 8, 8, 0),
-                        relief="flat")
+                        bordercolor=C["border"], tabmargins=(4, 10, 4, 0),
+                        relief="flat", borderwidth=0)
         style.configure("TNotebook.Tab", background=C["bg"],
-                        foreground=C["text2"], padding=(20, 10),
-                        font=self.head_font, borderwidth=0, relief="flat")
+                        foreground=C["text2"], padding=(23, 11),
+                        font=(fam, 10, "bold"), borderwidth=0, relief="flat")
         style.map("TNotebook.Tab",
-                  background=[("selected", C["primary"]),
+                  background=[("selected", C["surface"]),
                               ("active", C["surface2"])],
-                  foreground=[("selected", C["on_primary"]),
+                  foreground=[("selected", C["primary"]),
                               ("active", C["text"])])
+        # 音乐库专用列表：更大的行高容纳封面缩略图，避免文字与封面挤在一起
+        style.configure("Lib.Treeview", background=C["surface"],
+                        fieldbackground=C["surface"], foreground=C["text"],
+                        font=(fam, 11), rowheight=54,
+                        bordercolor=C["divider"], relief="flat", borderwidth=0)
+        style.map("Lib.Treeview",
+                  background=[("selected", C["sel"])],
+                  foreground=[("selected", C["sel_text"])])
         style.configure("Treeview", background=C["surface"],
                         fieldbackground=C["surface"], foreground=C["text"],
-                        font=self.ui_font, rowheight=30,
+                        font=self.ui_font, rowheight=32,
                         bordercolor=C["divider"], relief="flat", borderwidth=0)
         style.configure("Treeview.Heading", background=C["surface2"],
                         foreground=C["text2"], font=self.head_font,
-                        padding=(8, 9), relief="flat",
+                        padding=(10, 10), relief="flat",
                         bordercolor=C["divider"])
         style.map("Treeview",
                   background=[("selected", C["sel"])],
@@ -1700,33 +1727,36 @@ class App(tk.Tk):
     # ------------------------------------------------------------ 主框架
     def _build_ui(self):
         C = self.C
-        self.app_bar = tk.Frame(self, background=C["app_bar"], height=60)
+        self.app_bar = tk.Frame(self, background=C["app_bar"], height=64)
         self.app_bar.pack(fill="x")
         self.app_bar.pack_propagate(False)
+        self._bar_rule = tk.Frame(self, background=C["border"], height=1)
+        self._bar_rule.pack(fill="x")
+        self._bar_rule._sq_bg = "border"
         tk.Label(self.app_bar, text="Squeezelite", background=C["app_bar"],
                  foreground=C["on_app_bar"], font=(self.fam, 17, "bold")
                  ).pack(side="left", padx=(20, 8))
         tk.Label(self.app_bar, text="LMS Material 控制台",
                  background=C["app_bar"], foreground=C["on_app_bar"],
                  font=(self.fam, 10)).pack(side="left")
-        self.theme_btn = tk.Button(
-            self.app_bar,
-            text="切换浅色" if self.theme_name == "dark" else "切换深色",
-            command=self._toggle_theme, relief="flat", bd=0,
-            background=C["app_bar"], foreground=C["on_app_bar"],
-            activebackground=C["primary_dark"],
-            activeforeground=C["on_app_bar"],
-            font=(self.fam, 10), padx=14, pady=4, cursor="hand2")
-        self.theme_btn.pack(side="right", padx=(6, 16))
+        # 主题：Material 分段按钮，自绘以避免 ttk.Combobox 在深色 app bar
+        # 上被系统渲染成白底 / 浅色字导致无法辨认。
         self.theme_mode_var = tk.StringVar(
             value=("跟随系统" if self.theme_mode == "system" else
                    ("深色" if self.theme_name == "dark" else "浅色")))
-        self.theme_mode_cb = ttk.Combobox(
-            self.app_bar, textvariable=self.theme_mode_var, state="readonly",
-            width=10, values=["浅色", "深色", "跟随系统"])
-        self.theme_mode_cb.pack(side="right", padx=(6, 4))
-        self.theme_mode_cb.bind("<<ComboboxSelected>>",
-                                lambda e: self._on_theme_mode())
+        seg = tk.Frame(self.app_bar, background=C["app_bar"],
+                       highlightbackground=C["primary_dark"],
+                       highlightthickness=1, bd=0)
+        seg.pack(side="right", padx=(6, 18))
+        self.theme_segs = {}
+        for label in ("浅色", "深色", "跟随系统"):
+            b = tk.Button(seg, text=label, relief="flat", bd=0,
+                          cursor="hand2", font=(self.fam, 10),
+                          padx=12, pady=4,
+                          command=lambda v=label: self._on_theme_choice(v))
+            b.pack(side="left")
+            self.theme_segs[label] = b
+        self._theme_seg_update()
         self.platform_lbl = tk.Label(
             self.app_bar, text="", background=C["app_bar"],
             foreground=C["on_app_bar"], font=(self.fam, 9))
@@ -2870,7 +2900,8 @@ class App(tk.Tk):
 
         self.np_view_detail = ttk.Frame(self.np_view_host)
         self.np_detail_text = tk.Text(self.np_view_detail, height=12, wrap="word",
-                                      font=self.ui_font, **self._text_opts(False))
+                                      font=self.ui_font, tabs=(112,),
+                                      **self._text_opts(False))
         self.np_detail_text.pack(fill="both", expand=True)
         self.np_detail_text.configure(state="disabled")
         self._attach_wheel(self.np_detail_text, self.np_detail_text)
@@ -3322,8 +3353,42 @@ class App(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------ Tab: 音乐库 (阶段 2)
+    # ------------------------------------------------ Tab: 音乐库 (阶段 2)
+    LIB_MODE_MAP = {"专辑": "albums", "艺术家": "artists", "曲目": "titles",
+                    "流派": "genres", "播放列表": "playlists"}
+    LIB_MODE_LABEL = {"albums": "专辑", "artists": "艺术家", "titles": "曲目",
+                      "genres": "流派", "playlists": "播放列表"}
+
+    def _lib_card(self, parent, bgkey="surface"):
+        """带细边框的 Material 卡片容器，并登记以便换肤时刷新边框色。"""
+        C = self.C
+        f = tk.Frame(parent, background=C[bgkey],
+                     highlightbackground=C["border"],
+                     highlightthickness=1, bd=0)
+        f._sq_bg = bgkey
+        self.lib_cards.append(f)
+        return f
+
+    def _lib_label(self, parent, text, fgkey="text", size=10, bold=False):
+        C = self.C
+        l = tk.Label(parent, text=text, background=C["surface"],
+                     foreground=C[fgkey],
+                     font=(self.fam, size, "bold") if bold else (self.fam, size))
+        l._sq_bg = "surface"
+        l._sq_fg = fgkey
+        return l
+
+    def _lib_rule(self, parent, vertical=False):
+        C = self.C
+        r = tk.Frame(parent, background=C["border"],
+                     width=1 if vertical else 0,
+                     height=0 if vertical else 1)
+        r._sq_bg = "border"
+        return r
+
     def _build_tab_lib(self):
         f = self.tab_lib
+        C = self.C
         self.lib_mode = "albums"
         self.lib_page = 0
         self.lib_pagesize = 50
@@ -3336,88 +3401,187 @@ class App(tk.Tk):
         self.lib_photo_refs = {}
         self.lib_cover_key = ""
         self.lib_photo = None
+        self.lib_stack = []
+        self.lib_drill = None
+        self.lib_cards = []
 
-        top = ttk.Frame(f, padding=(10, 8))
-        top.pack(fill="x")
-        ttk.Label(top, text="浏览").pack(side="left")
+        # ---------------- 工具卡片 ----------------
+        tools = self._lib_card(f)
+        tools.pack(fill="x", padx=12, pady=(10, 6))
+        inner = tk.Frame(tools, background=C["surface"], padx=12, pady=9)
+        inner._sq_bg = "surface"
+        inner.pack(fill="x")
+
+        self._lib_label(inner, "浏览", "text2", 9).pack(side="left")
         self.lib_mode_var = tk.StringVar(value="专辑")
-        mcb = ttk.Combobox(top, textvariable=self.lib_mode_var, state="readonly",
-                           width=12,
+        mcb = ttk.Combobox(inner, textvariable=self.lib_mode_var,
+                           state="readonly", width=9,
                            values=["专辑", "艺术家", "曲目", "流派", "播放列表"])
-        mcb.pack(side="left", padx=4)
+        mcb.pack(side="left", padx=(5, 2))
         mcb.bind("<<ComboboxSelected>>", lambda e: self._lib_on_mode())
-        ttk.Label(top, text="搜索").pack(side="left", padx=(12, 2))
+
         self.lib_query_var = tk.StringVar()
-        qe = ttk.Entry(top, textvariable=self.lib_query_var, width=22)
-        qe.pack(side="left")
+        qe = ttk.Entry(inner, textvariable=self.lib_query_var, width=14)
+        qe.pack(side="left", padx=(10, 3))
         qe.bind("<Return>", lambda e: self._lib_load(True))
-        ttk.Button(top, text="搜索",
-                   command=lambda: self._lib_load(True)).pack(side="left", padx=3)
-        ttk.Button(top, text="刷新",
-                   command=lambda: self._lib_load(True)).pack(side="left", padx=3)
-        ttk.Label(top, text="每页").pack(side="left", padx=(12, 2))
+        ttk.Button(inner, text="搜索", width=5, style="Tool.TButton",
+                   command=lambda: self._lib_load(True)).pack(side="left", padx=2)
+        ttk.Button(inner, text="刷新", width=5, style="Tool.TButton",
+                   command=lambda: self._lib_load(True)).pack(side="left", padx=2)
+
+        vr = self._lib_rule(inner, vertical=True)
+        vr.pack(side="left", fill="y", padx=8, pady=2)
+
         self.lib_size_var = tk.StringVar(value="50")
-        scb = ttk.Combobox(top, textvariable=self.lib_size_var, state="readonly",
-                           width=6, values=["24", "50", "100"])
+        scb = ttk.Combobox(inner, textvariable=self.lib_size_var,
+                           state="readonly", width=4,
+                           values=["24", "50", "100"])
         scb.pack(side="left")
         scb.bind("<<ComboboxSelected>>", lambda e: self._lib_on_size())
-        self.lib_page_lbl = ttk.Label(top, text="第 1 页", style="Hint.TLabel")
-        self.lib_page_lbl.pack(side="left", padx=(12, 4))
-        ttk.Button(top, text="◀", width=4,
-                   command=lambda: self._lib_page(-1)).pack(side="left", padx=2)
-        ttk.Button(top, text="▶", width=4,
-                   command=lambda: self._lib_page(1)).pack(side="left", padx=2)
-        self.lib_state_lbl = ttk.Label(top, text="", style="Hint.TLabel")
-        self.lib_state_lbl.pack(side="right", padx=6)
+        self.lib_page_lbl = self._lib_label(inner, "1 / 1 · 0 项", "text2", 9)
+        self.lib_page_lbl.pack(side="left", padx=(8, 4))
+        ttk.Button(inner, text="◀", width=3, style="Tool.TButton",
+                   command=lambda: self._lib_page(-1)).pack(side="left", padx=1)
+        ttk.Button(inner, text="▶", width=3, style="Tool.TButton",
+                   command=lambda: self._lib_page(1)).pack(side="left", padx=1)
 
-        body = ttk.Frame(f, padding=(10, 4))
+        sub = tk.Frame(tools, background=C["surface"], padx=12, pady=8)
+        sub._sq_bg = "surface"
+        sub.pack(fill="x")
+        self.lib_state_lbl = self._lib_label(sub, "", "text2", 9)
+        self.lib_state_lbl.pack(side="left")
+        self._lib_label(sub, "双击专辑查看曲目 · 双击曲目直接播放",
+                        "text3", 9).pack(side="right")
+
+        # ---------------- 面包屑 / 下钻导航 ----------------
+        crumb = tk.Frame(f, background=C["bg"])
+        crumb._sq_bg = "bg"
+        crumb.pack(fill="x", padx=12, pady=(2, 6))
+        crumb.columnconfigure(2, weight=1)
+        self.lib_back_btn = ttk.Button(crumb, text="← 返回",
+                                       command=self._lib_back)
+        self.lib_back_btn.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.lib_crumb_lbl = tk.Label(crumb, text="", background=C["bg"],
+                                      foreground=C["text2"],
+                                      font=(self.fam, 10))
+        self.lib_crumb_lbl._sq_bg = "bg"
+        self.lib_crumb_lbl._sq_fg = "text2"
+        self.lib_crumb_lbl.grid(row=0, column=1, sticky="w")
+        self.lib_album_btn = ttk.Button(crumb, text="▶ 播放整张专辑",
+                                        command=self._lib_play_album)
+        self.lib_album_btn.grid(row=0, column=3, sticky="e", padx=(10, 0))
+
+        # ---------------- 主体：列表 + 详情 ----------------
+        body = ttk.Frame(f, padding=(12, 2, 12, 10))
         body.pack(fill="both", expand=True)
-        lp = ttk.Frame(body)
+
+        lp = self._lib_card(body)
         lp.pack(side="left", fill="both", expand=True)
-        self.lib_tree = ttk.Treeview(lp, columns=("name", "info"),
-                                     show="tree headings", height=18)
+        lpin = tk.Frame(lp, background=C["surface"])
+        lpin._sq_bg = "surface"
+        lpin.pack(fill="both", expand=True, padx=1, pady=1)
+        self.lib_tree = ttk.Treeview(
+            lpin, columns=("name", "info"), show="tree headings",
+            height=16, style="Lib.Treeview")
         self.lib_tree.heading("#0", text="封面")
-        self.lib_tree.column("#0", width=62, stretch=False, anchor="center")
+        self.lib_tree.column("#0", width=68, stretch=False, anchor="center")
         self.lib_tree.heading("name", text="名称")
-        self.lib_tree.column("name", width=300, anchor="w")
+        self.lib_tree.column("name", width=330, anchor="w", stretch=True)
         self.lib_tree.heading("info", text="信息")
-        self.lib_tree.column("info", width=280, anchor="w")
-        sb = ttk.Scrollbar(lp, orient="vertical", command=self.lib_tree.yview)
+        self.lib_tree.column("info", width=240, anchor="w", stretch=False)
+        sb = ttk.Scrollbar(lpin, orient="vertical", command=self.lib_tree.yview)
         self.lib_tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.lib_tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y", padx=(0, 1), pady=1)
+        self.lib_tree.pack(side="left", fill="both", expand=True, padx=1, pady=1)
         self._attach_wheel(self.lib_tree, self.lib_tree)
         self.lib_tree.bind("<<TreeviewSelect>>", lambda e: self._lib_on_select())
-        self.lib_tree.bind("<Double-1>", lambda e: self._lib_play_selected())
+        self.lib_tree.bind("<Double-1>", self._lib_on_double)
 
-        rp = ttk.Frame(body, width=290)
+        rp = self._lib_card(body)
         rp.pack(side="right", fill="y", padx=(12, 0))
+        rp.configure(width=300)
         rp.pack_propagate(False)
-        box = ttk.Frame(rp, width=260, height=260)
-        box.pack(pady=(2, 8))
-        box.pack_propagate(False)
-        self.lib_cover_lbl = tk.Label(box, text="无封面",
-                                      anchor="center", justify="center")
+        rpin = tk.Frame(rp, background=C["surface"], padx=12, pady=12)
+        rpin._sq_bg = "surface"
+        rpin.pack(fill="both", expand=True)
+
+        cover_box = tk.Frame(rpin, background=C["surface2"],
+                             highlightbackground=C["border"],
+                             highlightthickness=1, bd=0,
+                             width=272, height=272)
+        cover_box.pack(pady=(0, 10))
+        cover_box.pack_propagate(False)
+        self.lib_cover_box = cover_box
+        self.lib_cover_lbl = tk.Label(cover_box, text="无封面",
+                                      anchor="center", justify="center",
+                                      background=C["surface2"],
+                                      foreground=C["text3"])
+        self.lib_cover_lbl._sq_bg = "surface2"
+        self.lib_cover_lbl._sq_fg = "text3"
         self.lib_cover_lbl.pack(fill="both", expand=True)
-        self.lib_detail_text = tk.Text(rp, height=11, wrap="word",
-                                       font=self.small_font,
-                                       **self._text_opts(False))
+
+        self.lib_title_lbl = self._lib_label(rpin, "—", "text", 13, True)
+        self.lib_title_lbl.configure(anchor="w", justify="left", wraplength=272)
+        self.lib_title_lbl.pack(fill="x")
+        self.lib_sub_lbl = self._lib_label(rpin, "选择左侧条目查看详情", "text2", 10)
+        self.lib_sub_lbl.configure(anchor="w", justify="left", wraplength=272)
+        self.lib_sub_lbl.pack(fill="x", pady=(2, 8))
+        self._lib_rule(rpin).pack(fill="x", pady=(0, 8))
+
+        self.lib_detail_text = tk.Text(
+            rpin, height=9, wrap="word", font=self.small_font,
+            tabs=(112,), **self._text_opts(False))
+        self.lib_detail_text.configure(background=C["surface"])
         self.lib_detail_text.pack(fill="both", expand=True)
         self.lib_detail_text.configure(state="disabled")
         self._attach_wheel(self.lib_detail_text, self.lib_detail_text)
-        ttk.Button(rp, text="▶ 播放此项", style="Accent.TButton",
-                   command=self._lib_play_selected).pack(fill="x", pady=(6, 0))
+        self._lib_detail_tags()
+
+        btns = tk.Frame(rpin, background=C["surface"])
+        btns._sq_bg = "surface"
+        btns.pack(fill="x", pady=(10, 0))
+        self.lib_browse_btn = ttk.Button(btns, text="查看曲目",
+                                         state="disabled",
+                                         command=self._lib_browse_selected)
+        self.lib_browse_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Button(btns, text="▶ 播放此项", style="Accent.TButton",
+                   command=self._lib_play_selected).pack(
+                       side="right", fill="x", expand=True, padx=(4, 0))
+
         self._lib_after_theme()
+        self._lib_crumb()
         self.after(700, lambda: self._lib_load(True))
+
+    def _lib_detail_tags(self):
+        C = self.C
+        t = self.lib_detail_text
+        try:
+            t.tag_configure("h", font=(self.fam, 12, "bold"),
+                            foreground=C["text"], spacing3=6)
+            t.tag_configure("s", font=(self.fam, 10),
+                            foreground=C["text2"], spacing3=10)
+            t.tag_configure("b", font=self.small_font,
+                            foreground=C["text"], spacing1=2)
+        except Exception:
+            pass
 
     def _lib_after_theme(self):
         C = self.C
         try:
+            for c in getattr(self, "lib_cards", ()):
+                c.configure(highlightbackground=C["border"])
+            self.lib_cover_box.configure(highlightbackground=C["border"])
             self.lib_cover_lbl.configure(background=C["surface2"],
                                          foreground=C["text3"])
-            self.lib_detail_text.configure(**self._text_opts(False))
+            self.lib_detail_text.configure(
+                background=C["surface"], foreground=C["text"],
+                insertbackground=C["text"], selectbackground=C["sel"],
+                selectforeground=C["sel_text"],
+                highlightbackground=C["border"])
+            self._lib_detail_tags()
             t = self.lib_tree
-            t.tag_configure("odd", background=C["row_alt"], foreground=C["text"])
+            t.tag_configure("odd", background=C["row_alt"],
+                            foreground=C["text"])
             t.tag_configure("chosen", background=C["sel"],
                             foreground=C["sel_text"])
         except Exception:
@@ -3432,8 +3596,102 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _lib_on_mode(self):
+    # ------------------------------------------------ 导航
+    def _lib_effective(self):
+        if self.lib_drill:
+            return self.lib_drill["mode"], self.lib_drill["filters"]
+        return self.LIB_MODE_MAP.get(self.lib_mode_var.get(), "albums"), []
+
+    def _lib_crumb(self):
+        d = self.lib_drill
+        if d:
+            self.lib_back_btn.grid()
+            self.lib_crumb_lbl.configure(
+                text="音乐库  ›  %s  ›  %s" % (d["parent"], d["name"]))
+            if d.get("album_id"):
+                self.lib_album_btn.grid()
+            else:
+                self.lib_album_btn.grid_remove()
+        else:
+            self.lib_back_btn.grid_remove()
+            self.lib_album_btn.grid_remove()
+            self.lib_crumb_lbl.configure(
+                text="音乐库  ›  %s" % self.lib_mode_var.get())
+
+    def _lib_enter(self, it):
+        kind = it.get("_kind") or self.lib_mode
+        if kind not in ("albums", "artists", "genres"):
+            self._lib_play(it)
+            return
+        iid = str(it.get("id", ""))
+        if not iid:
+            return
+        self.lib_stack.append({
+            "drill": self.lib_drill, "page": self.lib_page,
+            "mode_var": self.lib_mode_var.get(),
+            "query": self.lib_query_var.get()})
+        if kind == "albums":
+            self.lib_drill = {
+                "mode": "titles", "parent": "专辑",
+                "name": it.get("_name", ""), "album_id": iid,
+                "filters": ["album_id:" + iid, "sort:tracknum"]}
+        else:
+            key = "artist_id:" if kind == "artists" else "genre_id:"
+            self.lib_drill = {
+                "mode": "albums", "parent": self.LIB_MODE_LABEL.get(kind, ""),
+                "name": it.get("_name", ""), "album_id": "",
+                "filters": [key + iid]}
         self.lib_page = 0
+        self.lib_query_var.set("")
+        self.lib_mode_var.set(self.LIB_MODE_LABEL.get(self.lib_drill["mode"], "专辑"))
+        self._lib_crumb()
+        self._lib_load(True)
+
+    def _lib_back(self):
+        if not self.lib_stack:
+            return
+        st = self.lib_stack.pop()
+        self.lib_drill = st["drill"]
+        self.lib_page = st["page"]
+        self.lib_query_var.set(st["query"])
+        self.lib_mode_var.set(st["mode_var"])
+        self._lib_crumb()
+        self._lib_load(True)
+
+    def _lib_on_double(self, e):
+        iid = self.lib_tree.identify_row(e.y)
+        if not iid:
+            return
+        self.lib_tree.selection_set(iid)
+        it = self.lib_rowmap.get(iid)
+        if not it:
+            return
+        kind = it.get("_kind") or self.lib_mode
+        if kind in ("albums", "artists", "genres"):
+            self._lib_enter(it)
+        else:
+            self._lib_play(it)
+        return "break"
+
+    def _lib_browse_selected(self):
+        if self.lib_current:
+            self._lib_enter(self.lib_current)
+
+    def _lib_play_album(self):
+        d = self.lib_drill or {}
+        aid = d.get("album_id")
+        if not aid:
+            return
+        self._lib_play({"id": aid, "_kind": "albums",
+                        "_name": d.get("name", "整张专辑")})
+
+    # ------------------------------------------------ 载入
+    def _lib_on_mode(self):
+        self.lib_stack = []
+        self.lib_drill = None
+        self.lib_page = 0
+        self.lib_query_var.set("")
+        self._lib_crumb()
         self._lib_load(True)
 
     def _lib_on_size(self):
@@ -3464,9 +3722,7 @@ class App(tk.Tk):
         self.lib_busy = True
         self.lib_req += 1
         req = self.lib_req
-        mode = {"专辑": "albums", "艺术家": "artists", "曲目": "titles",
-                "流派": "genres", "播放列表": "playlists"}.get(
-                    self.lib_mode_var.get(), "albums")
+        mode, filters = self._lib_effective()
         start = self.lib_page * self.lib_pagesize
         query = self.lib_query_var.get().strip()
         cfg = dict(self.cfg)
@@ -3477,7 +3733,8 @@ class App(tk.Tk):
 
         def worker():
             try:
-                items, total = lib_browse(cfg, mode, start, self.lib_pagesize, query)
+                items, total = lib_browse(cfg, mode, start,
+                                          self.lib_pagesize, query, filters)
                 self.q.put(("lib_items", {"req": req, "items": items,
                                           "total": total, "mode": mode,
                                           "start": start, "query": query}))
@@ -3495,7 +3752,7 @@ class App(tk.Tk):
         self.lib_mode = d.get("mode") or "albums"
         pages = max(1, (self.lib_total + self.lib_pagesize - 1) // self.lib_pagesize)
         try:
-            self.lib_page_lbl.configure(text="第 %d / %d 页 · 共 %d 项" % (
+            self.lib_page_lbl.configure(text="%d / %d 页 · %d 项" % (
                 self.lib_page + 1, pages, self.lib_total))
             q = d.get("query") or ""
             self.lib_state_lbl.configure(
@@ -3505,20 +3762,42 @@ class App(tk.Tk):
             pass
         self._lib_fill_tree()
         self._lib_thumbs(self.lib_items)
+        self.lib_current = None
+        self._lib_set_cover_placeholder("选择条目查看封面")
+        try:
+            self.lib_title_lbl.configure(text="—")
+            self.lib_sub_lbl.configure(text="选择左侧条目查看详情")
+            self.lib_detail_text.configure(state="normal")
+            self.lib_detail_text.delete("1.0", "end")
+            self.lib_detail_text.configure(state="disabled")
+            self.lib_browse_btn.configure(state="disabled", text="查看曲目")
+        except Exception:
+            pass
 
+    # ------------------------------------------------ 列表
     def _lib_info(self, it):
+        name = str(it.get("_name") or "").strip()
+        kind = it.get("_kind") or self.lib_mode
+        keys = {"albums": ("artist", "year", "tracks"),
+                "titles": ("artist", "album", "duration"),
+                "artists": ("albums", "tracks"),
+                "genres": ("albums", "tracks"),
+                "playlists": ("tracks",)}.get(kind, ())
         parts = []
-        for k in ("artist", "album", "year", "genre", "tracknum",
-                  "duration", "tracks", "playlist", "textkey"):
+        for k in keys:
             v = it.get(k)
-            if not v or k == "textkey":
+            if not v or str(v) in ("0", "-1"):
                 continue
-            if k == "duration":
-                v = fmt_sec(v)
-            parts.append(str(v))
-            if len(parts) >= 3:
+            s = fmt_sec(v) if k == "duration" else str(v).strip()
+            if not s or s == name or s in parts:
+                continue
+            parts.append(s)
+            if len(parts) >= 2:
                 break
-        return "  ·  ".join(parts) or str(it.get("id", ""))
+        if not parts:
+            return self.LIB_MODE_LABEL.get(kind, "")
+        out = "  ·  ".join(parts)
+        return out if len(out) <= 58 else out[:56] + "…"
 
     def _lib_fill_tree(self):
         t = self.lib_tree
@@ -3528,11 +3807,36 @@ class App(tk.Tk):
         self.lib_photo_refs = {}
         for n, it in enumerate(self.lib_items):
             iid = "r%d" % n
+            nm = str(it.get("_name") or "")
+            tn = str(it.get("tracknum") or "")
+            if it.get("_kind") == "titles" and tn.isdigit() and int(tn) > 0:
+                nm = "%s.  %s" % (tn, nm)
             t.insert("", "end", iid=iid, text="",
-                     values=(it["_name"], self._lib_info(it)),
+                     values=(nm, self._lib_info(it)),
                      tags=("odd",) if n % 2 else ())
             self.lib_rowmap[iid] = it
 
+    def _lib_render_detail(self, it):
+        t = self.lib_detail_text
+        d = dict(it)
+        if str(d.get("title") or "") == str(it.get("_name") or ""):
+            d.pop("title", None)
+        sub = []
+        for k in ("artist", "album", "year", "genre"):
+            v = str(d.get(k) or "").strip()
+            if v and v != str(it.get("_name") or "") and v not in sub:
+                sub.append(v)
+            if len(sub) >= 2:
+                break
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        t.insert("end", str(it.get("_name") or "—") + "\n", "h")
+        t.insert("end", ("  ·  ".join(sub) or self.LIB_MODE_LABEL.get(
+            it.get("_kind") or self.lib_mode, "")) + "\n", "s")
+        t.insert("end", detail_lines(d) + "\n", "b")
+        t.configure(state="disabled")
+
+    # ------------------------------------------------ 选中 / 封面
     def _lib_on_select(self):
         sel = self.lib_tree.selection()
         if not sel:
@@ -3541,26 +3845,31 @@ class App(tk.Tk):
         if not it:
             return
         self.lib_current = it
+        kind = it.get("_kind") or self.lib_mode
         try:
-            self.lib_detail_text.configure(state="normal")
-            self.lib_detail_text.delete("1.0", "end")
-            self.lib_detail_text.insert(
-                "1.0", "%s\n\n%s" % (it["_name"], detail_lines(it)))
-            self.lib_detail_text.configure(state="disabled")
+            self.lib_title_lbl.configure(text=str(it.get("_name") or "—"))
+            self.lib_sub_lbl.configure(text=self._lib_info(it))
+            self._lib_render_detail(it)
+            if kind in ("albums", "artists", "genres"):
+                self.lib_browse_btn.configure(
+                    state="normal",
+                    text="查看专辑" if kind != "albums" else "查看曲目")
+            else:
+                self.lib_browse_btn.configure(state="disabled", text="查看曲目")
         except Exception:
             pass
-        cid = it.get("coverid") or it.get("artwork_url") or ""
+        cid = lib_cover_id(it)
         self.lib_cover_key = "%s|%s" % (it.get("id", ""), it.get("_name", ""))
         key = self.lib_cover_key
         self._lib_set_cover_placeholder("载入封面…")
-        if not cid or str(cid) in ("0", "-1"):
+        if not cid:
             self._lib_set_cover_placeholder("无封面")
             return
         cfg = dict(self.cfg)
 
         def worker():
             try:
-                is_url = str(cid).startswith("http")
+                is_url = cid.startswith("http")
                 url = np_cover_url(cfg, "" if is_url else cid,
                                    cid if is_url else "")
                 if not url:
@@ -3573,7 +3882,7 @@ class App(tk.Tk):
                     pass
                 data = http_request(url, headers=ch or None, timeout=8)
                 self.q.put(("lib_cover", {"key": key,
-                                          "png": decode_cover_png(data, 260)}))
+                                          "png": decode_cover_png(data, 272)}))
             except Exception:
                 pass
         threading.Thread(target=worker, daemon=True).start()
@@ -3590,7 +3899,7 @@ class App(tk.Tk):
             self.lib_photo = tk.PhotoImage(
                 data=base64.b64encode(png).decode("ascii"))
             self.lib_cover_lbl.configure(image=self.lib_photo, text="",
-                                         background=self.C["surface"])
+                                         background=self.C["surface2"])
         except Exception:
             self._lib_set_cover_placeholder("封面加载失败")
 
@@ -3599,17 +3908,16 @@ class App(tk.Tk):
         cfg = dict(self.cfg)
         jobs = []
         for n, it in enumerate(items[:60]):
-            cid = it.get("coverid") or it.get("artwork_url") or ""
-            if not cid or str(cid) in ("0", "-1"):
-                continue
-            jobs.append(("r%d" % n, cid))
+            cid = lib_cover_id(it)
+            if cid:
+                jobs.append(("r%d" % n, cid))
         if not jobs:
             return
 
         def work(pair):
             iid, cid = pair
             try:
-                is_url = str(cid).startswith("http")
+                is_url = cid.startswith("http")
                 url = np_cover_url(cfg, "" if is_url else cid,
                                    cid if is_url else "")
                 ch = {}
@@ -3619,7 +3927,7 @@ class App(tk.Tk):
                 except Exception:
                     pass
                 data = http_request(url, headers=ch or None, timeout=5)
-                png = decode_cover_png(data, 48)
+                png = decode_cover_png(data, 44)
                 if png:
                     return (iid, png)
             except Exception:
@@ -3652,6 +3960,7 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    # ------------------------------------------------ 播放
     def _lib_play_selected(self):
         sel = self.lib_tree.selection()
         if not sel:
@@ -3721,29 +4030,31 @@ class App(tk.Tk):
         except Exception:
             pass
         try:
-            C = self.C
-            self.theme_btn.configure(
-                text="切换浅色" if name == "dark" else "切换深色",
-                background=C["app_bar"], foreground=C["on_app_bar"],
-                activebackground=C["primary_dark"],
-                activeforeground=C["on_app_bar"])
+            self._theme_seg_update()
         except Exception:
             pass
         self._log("界面主题：%s（Lyrion Material）" % (
             "深色" if name == "dark" else "浅色"))
 
-    def _toggle_theme(self):
-        new = "dark" if self.theme_name == "light" else "light"
-        self.theme_mode = "manual"
-        self.cfg["theme_mode"] = "manual"
+    def _theme_seg_update(self):
+        """分段按钮：选中项反色胶囊，其余融入 app bar。"""
+        C = self.C
+        cur = ("跟随系统" if self.theme_mode == "system" else
+               ("深色" if self.theme_name == "dark" else "浅色"))
+        for label, b in getattr(self, "theme_segs", {}).items():
+            on = (label == cur)
+            b.configure(
+                background=C["on_app_bar"] if on else C["app_bar"],
+                foreground=C["app_bar"] if on else C["on_app_bar"],
+                activebackground=C["on_app_bar"] if on else C["primary_dark"],
+                activeforeground=C["app_bar"] if on else C["on_app_bar"],
+                font=(self.fam, 10, "bold") if on else (self.fam, 10))
         try:
-            self.theme_mode_var.set("深色" if new == "dark" else "浅色")
+            self.theme_mode_var.set(cur)
         except Exception:
             pass
-        self._apply_theme(new, save=True)
 
-    def _on_theme_mode(self):
-        v = self.theme_mode_var.get()
+    def _on_theme_choice(self, v):
         if v == "跟随系统":
             self.theme_mode = "system"
             self.cfg["theme_mode"] = "system"
@@ -3751,6 +4062,7 @@ class App(tk.Tk):
                 save_config(self.cfg)
             except Exception:
                 pass
+            self._theme_seg_update()
             self._log("界面主题：跟随系统")
             def once():
                 try:
@@ -3989,13 +4301,26 @@ def np_lyrics_resolve(cfg, track, playerid="", force=False):
         return t, s
     return "", ""
 
-def lib_browse(cfg, mode, start=0, count=50, query=""):
+def lib_cover_id(it):
+    """LMS 不同查询返回的封面标识字段名不同，统一取一个可用值。"""
+    for k in ("coverid", "artwork_track_id", "artwork_url", "cover"):
+        v = str(it.get(k) or "").strip()
+        if v and v not in ("0", "-1"):
+            return v
+    return ""
+
+def lib_browse(cfg, mode, start=0, count=50, query="", filters=None):
+    """浏览 LMS 曲库；filters 用于下钻（album_id / artist_id / genre_id 等）。"""
     cmd, loopkey, namekey, label = LIB_MODES.get(mode, LIB_MODES["albums"])
     args = [cmd, int(start), int(count)]
     if mode == "albums":
-        args.append("tags:l")
+        # a=艺术家 l=专辑 j=artwork_track_id（小写 j 才返回封面标识）
+        args.append("tags:alj")
     elif mode == "titles":
         args.append("tags:alcKdtu")
+    for f in (filters or []):
+        if f:
+            args.append(str(f))
     if query:
         args.append("search:" + str(query).strip())
     r = lms_rpc(cfg, args, _id=30)
@@ -4032,7 +4357,9 @@ DETAIL_ORDER = ["title", "artist", "albumartist", "album", "genre", "year",
                 "tracknum", "disc", "duration", "bitrate", "samplerate",
                 "samplesize", "type", "filesize", "url", "comment",
                 "composer", "conductor", "bpm"]
-DETAIL_SKIP = {"id", "coverid", "artwork_url", "_kind", "_name"}
+DETAIL_SKIP = {"id", "coverid", "artwork_url", "artwork_track_id",
+               "favorites_title", "favorites_url", "performance",
+               "_kind", "_name"}
 
 def detail_value(k, v):
     s = str(v)
@@ -4047,6 +4374,19 @@ def detail_value(k, v):
     if k == "filesize" and s.isdigit():
         n = int(s)
         return "%.1f MB" % (n / 1048576.0) if n > 1048576 else "%d KB" % (n // 1024)
+    if k in ("url", "file") and s:
+        try:
+            s = urllib.parse.unquote(s)
+        except Exception:
+            pass
+        for pre in ("file://", "http://", "https://"):
+            if s.startswith(pre):
+                s = s[len(pre):]
+                break
+        parts = [x for x in s.replace("\\", "/").split("/") if x]
+        if len(parts) > 2:
+            s = "…/" + "/".join(parts[-2:])
+        return s
     return s
 
 def detail_lines(track):
@@ -4058,14 +4398,14 @@ def detail_lines(track):
         if v in (None, "", "0") or k in used:
             continue
         used.add(k)
-        out.append("%-10s %s" % (DETAIL_LABELS.get(k, k) + "：", detail_value(k, v)))
+        out.append("%s：\t%s" % (DETAIL_LABELS.get(k, k), detail_value(k, v)))
     for k in sorted(t.keys()):
         if k in used or k in DETAIL_SKIP or k.startswith("_"):
             continue
         v = t.get(k)
         if v in (None, "", "0"):
             continue
-        out.append("%-10s %s" % (k + "：", str(v)))
+        out.append("%s：\t%s" % (k, str(v)))
     return "\n".join(out) if out else "（暂无详情，LMS 未返回更多标签）"
 
 def viz_frame(t, playing=True, n=32, seed=0.0):
@@ -4085,8 +4425,9 @@ def viz_frame(t, playing=True, n=32, seed=0.0):
 
 
 HELP_TEXT = """Squeezelite GUI · 使用说明
-界面：顶栏可选择「浅色 / 深色 / 跟随系统」，跟随系统会自动检测
-macOS / Linux / Windows 的明暗外观并实时切换（Lyrion Material 风格）；
+界面：顶栏右侧「浅色 / 深色 / 跟随系统」分段按钮可直接切换主题，
+跟随系统会自动检测 macOS / Linux / Windows 的明暗外观并实时切换
+（Lyrion Material 风格）；
 参数配置页、设备列表、版本列表、音乐库均支持鼠标滚轮上下滚动。
 
 【正在播放】（v1.3.0）
@@ -4103,10 +4444,13 @@ macOS / Linux / Windows 的明暗外观并实时切换（Lyrion Material 风格�
   因此不是真实 FFT 频谱）。点「重新搜索在线歌词」可忽略缓存重试。
   遥控端（手机 / 网页）发起播放后，本页会自动更新，无需在此点播。
 
-【音乐库】（v1.3.0 · 阶段 2）
+【音乐库】（v1.4.0 · 阶段 2）
   可按专辑 / 艺术家 / 曲目 / 流派 / 播放列表分页浏览，输入关键词后
-  回车或点「搜索」走 LMS 的 search: 过滤；列表带专辑封面缩略图，
-  选中一项右侧显示大封面与详情，点「▶ 播放此项」或双击即通过
+  回车或点「搜索」走 LMS 的 search: 过滤；列表带封面缩略图，
+  选中一项右侧卡片显示大封面、标题与 LMS 返回的全部标签。
+  双击专辑 / 艺术家 / 流派（或点「查看曲目」）进入下一级浏览，
+  顶部面包屑「← 返回」逐级回退；专辑内「▶ 播放整张专辑」可整张点播。
+  曲目双击、或选中后点「▶ 播放此项」，通过
   playlistcontrol cmd:load 发送到当前播放器（需先在「正在播放」页选定）。
   所有请求自动携带 LMS 的用户名/密码。
 
