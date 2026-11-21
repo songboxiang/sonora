@@ -1,0 +1,13 @@
+# 构建产物与第三方二进制（一律不入库）
+*.app/
+*.dmg
+*.pkg
+Squeezelite
+squeezelite
+python/
+*.icns
+*.pyc
+__pycache__/
+*.bak-*
+.DS_Store
+.squeezelite_gui/
