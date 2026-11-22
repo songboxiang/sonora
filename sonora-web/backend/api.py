@@ -10,12 +10,21 @@ import sys
 import json
 import base64
 import traceback
+import subprocess
+import threading
+import time as _time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import legacy_core as c
 
 CFG = c.load_config()
 _AUDIO_STATE = {}   # parse_sl_output 的增量状态（跨 getAudio 调用）
+
+# ---- squeezelite 引擎进程状态 ----
+_ENGINE = {"proc": None, "pid": 0, "start_ts": 0.0, "logs": [],
+           "exit_code": None, "argv": [], "watchdog": None}
+_ENGINE_LOCK = threading.Lock()
+_LOG_MAX = 400
 
 
 def _wrap(fn):
@@ -34,7 +43,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.2"}
 
 
 @_wrap
@@ -67,9 +76,23 @@ def getConnection():
     try:
         r = c.lms_current(CFG)
         if r and r.get("ok"):
+            # 服务器连通后，检查是否有 squeezelite 播放器注册：
+            # 无播放器时所有播放/静音命令都会失败，需明确告知用户。
+            player_count = 0
+            try:
+                ps = c.np_players(CFG)
+                player_count = len(ps)
+            except Exception:
+                player_count = -1  # 查询失败，不确定
+            if player_count == 0:
+                return {"connected": True, "state": "noplayer",
+                        "label": "已连服务器·播放器未启动",
+                        "url": r.get("url", ""), "version": r.get("version", ""),
+                        "playerCount": 0,
+                        "error": "LMS 服务器已连接，但没有 squeezelite 播放器在线。请到「播放器引擎」页启动引擎。"}
             return {"connected": True, "state": "online",
                     "label": "已连接", "url": r.get("url", ""),
-                    "version": r.get("version", "")}
+                    "version": r.get("version", ""), "playerCount": player_count}
         return {"connected": False, "state": "offline",
                 "label": "连接失败", "url": (r or {}).get("url", ""),
                 "error": (r or {}).get("error", "")}
@@ -111,10 +134,21 @@ def getCover(track, size=420):
     full_url = c.np_cover_url(CFG, coverid, url)
     if not full_url:
         return None
+    data = None
     try:
         data = c.http_get(full_url, timeout=8)
     except Exception:
-        return None
+        data = None
+    if not data:
+        # 兜底：带 Basic Auth 头重试（LMS 启用密码保护时）
+        try:
+            import urllib.request as _ur
+            hdr = c.lms_auth_headers(CFG)
+            req = _ur.Request(full_url, headers=hdr)
+            with _ur.urlopen(req, timeout=8) as _r:
+                data = _r.read()
+        except Exception:
+            return None
     if not data:
         return None
     try:
@@ -215,13 +249,27 @@ def _lib_thumb(cid):
         return None
     try:
         url = c.np_cover_url(CFG, str(cid), "")
+        candidates = []
         if url:
-            url = url.replace("cover_300x300", "cover_96x96")                      .replace("cover.jpg", "cover_96x96.jpg")
+            candidates.append(url)
+            candidates.append(url.replace("cover_300x300", "cover_96x96")
+                                 .replace("cover.jpg", "cover_96x96.jpg"))
+            # 原始 cover（无尺寸后缀）兜底
+            candidates.append(url.replace("cover_300x300.jpg", "cover.jpg")
+                                 .replace("cover_96x96.jpg", "cover.jpg"))
         import urllib.request
         hdr = c.lms_auth_headers(CFG)
-        req = urllib.request.Request(url, headers=hdr)
-        with urllib.request.urlopen(req, timeout=4) as r:
-            raw = r.read()
+        raw = None
+        for u in [x for x in candidates if x]:
+            try:
+                req = urllib.request.Request(u, headers=hdr)
+                with urllib.request.urlopen(req, timeout=4) as r:
+                    raw = r.read()
+                if raw and len(raw) >= 100:
+                    break
+            except Exception:
+                raw = None
+                continue
         if not raw or len(raw) < 100:
             return None
         try:
@@ -824,8 +872,11 @@ def toggleMute():
     """一键静音/恢复：静音时记住当前音量并设为 0；恢复时还原。"""
     pid = _pick_pid()
     if not pid:
-        return {"ok": False, "error": "no player"}
-    st = c.np_status(CFG, pid)
+        return {"ok": False, "error": "没有在线播放器：请先在「播放器引擎」页启动 squeezelite 引擎，等待它注册到 LMS 后再静音。"}
+    try:
+        st = c.np_status(CFG, pid)
+    except Exception as _e:
+        return {"ok": False, "error": "读取播放器状态失败（%s）。请确认 squeezelite 引擎已启动并在线。" % str(_e)[:60]}
     cur = int(st.get("volume", 0) or 0)
     if cur > 0:
         _PREV_VOLUME["value"] = cur
@@ -846,7 +897,129 @@ def setSeek(seconds):
     return {"ok": True}
 
 
+
+# ================= squeezelite 引擎进程管理 =================
+def _engine_log(line):
+    txt = str(line).rstrip("\n")
+    if not txt:
+        return
+    with _ENGINE_LOCK:
+        _ENGINE["logs"].append(txt)
+        if len(_ENGINE["logs"]) > _LOG_MAX:
+            del _ENGINE["logs"][:-_LOG_MAX]
+
+
+def _engine_reader(proc):
+    """守护线程：持续读进程 stdout，记录日志并检测退出。"""
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            _engine_log(line)
+    except Exception as e:
+        _engine_log("[reader] %s" % e)
+    finally:
+        code = proc.poll()
+        with _ENGINE_LOCK:
+            _ENGINE["exit_code"] = code
+            _ENGINE["logs"].append("[进程已退出 code=%s]" % code)
+        _engine_log("[引擎进程结束 code=%s]" % code)
+
+
+def _engine_alive():
+    p = _ENGINE["proc"]
+    return bool(p and p.poll() is None)
+
+
+@_wrap
+def engineStatus():
+    """返回引擎实时状态：running/pid/命令/日志/退出码。"""
+    alive = _engine_alive()
+    with _ENGINE_LOCK:
+        logs = list(_ENGINE["logs"][-120:])
+    return {"ok": True, "running": alive, "pid": _ENGINE["pid"] if alive else 0,
+            "uptime": int(_time.time() - _ENGINE["start_ts"]) if alive else 0,
+            "command": c.preview_cmd(_ENGINE["argv"]) if _ENGINE["argv"] else "",
+            "exitCode": _ENGINE["exit_code"], "logs": logs,
+            "binary": c.find_binary(CFG) or ""}
+
+
+@_wrap
+def startEngine():
+    """真正启动 squeezelite 进程并注册到 LMS。"""
+    if _engine_alive():
+        return {"ok": True, "already": True, "pid": _ENGINE["pid"],
+                "message": "squeezelite 已在运行"}
+    values = {}
+    for pdef in c.PARAMS:
+        k = pdef["key"]
+        values[k] = CFG.get(k, pdef.get("default", ""))
+    problems = c.validate_all(values, CFG.get("extra", ""))
+    if problems:
+        return {"ok": False, "error": "参数校验未通过：\n" + "\n".join(problems)}
+    argv = c.build_argv(CFG, values)
+    if not any("output=" in str(a) for a in argv):
+        argv += ["-d", "output=info"]
+    binary = argv[0]
+    if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
+        return {"ok": False,
+                "error": "找不到可执行的 squeezelite：%s\n\n请到「播放器引擎」页指定二进制路径，或到「升级与更新」页安装 squeezelite。" % binary}
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                bufsize=1, creationflags=(0x08000000 if sys.platform == "win32" else 0))
+    except Exception as e:
+        return {"ok": False, "error": "启动失败：%s" % str(e)[:200]}
+    with _ENGINE_LOCK:
+        _ENGINE["proc"] = proc
+        _ENGINE["pid"] = proc.pid
+        _ENGINE["start_ts"] = _time.time()
+        _ENGINE["logs"] = ["$ %s\n" % c.preview_cmd(argv)]
+        _ENGINE["exit_code"] = None
+        _ENGINE["argv"] = list(argv)
+    t = threading.Thread(target=_engine_reader, args=(proc,), daemon=True)
+    t.start()
+    return {"ok": True, "pid": proc.pid, "command": c.preview_cmd(argv),
+            "message": "squeezelite 已启动 (PID %s)，正在注册到 LMS…" % proc.pid}
+
+
+@_wrap
+def stopEngine():
+    """停止 squeezelite 进程。"""
+    if not _engine_alive():
+        return {"ok": True, "already": True, "message": "引擎未在运行"}
+    p = _ENGINE["proc"]
+    try:
+        p.terminate()
+        try:
+            p.wait(timeout=4)
+        except Exception:
+            p.kill()
+    except Exception as e:
+        return {"ok": False, "error": "停止失败：%s" % str(e)[:150]}
+    with _ENGINE_LOCK:
+        _ENGINE["exit_code"] = p.poll()
+        _ENGINE["logs"].append("[已停止引擎]")
+    return {"ok": True, "message": "squeezelite 已停止"}
+
+
+def _auto_start_engine():
+    """若配置了开机自启且进程未运行，则自动拉起。"""
+    try:
+        if CFG.get("auto_start") and not _engine_alive():
+            r = startEngine()
+            if r.get("ok"):
+                _engine_log("[开机自启] squeezelite 已自动拉起 PID %s" % r.get("pid"))
+    except Exception:
+        pass
+
+
+# 模块加载后延迟触发自启（等主程序窗口初始化，避免阻塞导入）
+threading.Timer(2.0, _auto_start_engine).start()
+
+
 class BridgeAPI:
+    def engineStatus(self): return engineStatus()
+    def startEngine(self): return startEngine()
+    def stopEngine(self): return stopEngine()
     def getConnection(self): return getConnection()
     def applyBestParams(self): return applyBestParams()
     def toggleMute(self): return toggleMute()

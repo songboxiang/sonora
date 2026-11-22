@@ -474,6 +474,17 @@
   // ---- 播放器引擎 ----
   let selectedDevice="";
   async function loadLaunchPage(){
+    // 引擎实时状态
+    try{
+      const es=await apiCall("engineStatus",null);
+      if(es){
+        const on=!!es.running;
+        if($("engineState")) $("engineState").textContent=on?"引擎运行中 (PID "+es.pid+")":"引擎未运行";
+        if($("engineDot")) $("engineDot").classList.toggle("on",on);
+        if($("engineToggle")) $("engineToggle").textContent=on?"停止引擎":"启动引擎";
+        if($("engineLog") && Array.isArray(es.logs)) $("engineLog").textContent=es.logs.join("\n")||"暂无日志";
+      }
+    }catch(e){}
     const info=await apiCall("getLaunchInfo", window.__LAUNCH__||{binary:"",command:"squeezelite",version:"",autoRun:false,problems:[]});
     if(info){
       if($("engineVer")) $("engineVer").textContent = info.version?("squeezelite "+info.version):(info.binary||"未找到 squeezelite 可执行文件");
@@ -541,12 +552,27 @@
     else toast("保存失败");
   });
 
-  if($("engineToggle")) $("engineToggle").addEventListener("click",()=>{
-    const on=$("engineState").textContent.indexOf("运行中")<0;
-    $("engineState").textContent=on?"引擎运行中":"引擎未运行";
-    $("engineDot").classList.toggle("on",on);
-    $("engineToggle").textContent=on?"停止引擎":"启动引擎";
-    toast(on?"引擎已启动":"引擎已停止");
+  let engineBusy=false;
+  if($("engineToggle")) $("engineToggle").addEventListener("click",async()=>{
+    if(engineBusy) return;
+    engineBusy=true;
+    const btn=$("engineToggle");
+    const oldTxt=btn.textContent;
+    btn.textContent="处理中…"; btn.disabled=true;
+    try{
+      const running=$("engineState").textContent.indexOf("运行中")>=0;
+      const r=running
+        ? await apiCall("stopEngine",{ok:false,error:"后端未连接"})
+        : await apiCall("startEngine",{ok:false,error:"后端未连接"});
+      if(r&&r.ok===false){ toast("操作失败："+(r.error||"未知错误").split("\n")[0]); }
+      else{
+        toast(r&&r.message||(running?"引擎已停止":"引擎已启动"));
+        // 等 LMS 注册，稍后刷新状态与连接徽标
+        setTimeout(async()=>{ await loadLaunchPage(); if(typeof updateConnBadge==="function") updateConnBadge(); }, running?400:1800);
+        return;
+      }
+    }catch(e){ toast("引擎操作异常："+String(e).slice(0,60)); }
+    finally{ btn.textContent=oldTxt; btn.disabled=false; engineBusy=false; }
   });
   if($("autoStart")) $("autoStart").addEventListener("change",async e=>{
     await apiCall("setAutoStart",{ok:true},e.target.checked); toast("已更新开机自启");

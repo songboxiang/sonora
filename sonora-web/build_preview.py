@@ -107,7 +107,7 @@ window.__LAUNCH__ = {binary:'/opt/homebrew/bin/squeezelite', command:'squeezelit
 window.__FAV_IDS__ = ['t1','t3'];
 window.__QUEUE__ = {items:window.__QUEUE_ITEMS__,index:0,mode:'0 0',ok:true};
 window.__DRILL__ = {};
-window.__UPDATES__ = {local:'v2.0.1', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
+window.__UPDATES__ = {local:'v2.0.2', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
 window.__CHANGELOG__ = {items:[],source:'preview'};
 (function(){
   const base = {
@@ -167,7 +167,10 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     queueRemove:()=>Promise.resolve({ok:true}),
     queuePlayIndex:()=>Promise.resolve({ok:true}),
     setPlayMode:(sh,rp)=>Promise.resolve({ok:true}),
-    getConnection:()=>Promise.resolve({connected:true,state:'online',label:'已连接',url:'http://192.168.199.2:9000',version:'9.1.1'}),
+    getConnection:()=>Promise.resolve(window.__ENGINE_ON__?{connected:true,state:'online',label:'已连接',url:'http://192.168.199.2:9000',version:'9.1.1',playerCount:1}:{connected:true,state:'noplayer',label:'已连服务器·播放器未启动',url:'http://192.168.199.2:9000',version:'9.1.1',playerCount:0,error:'请在「播放器引擎」页启动引擎'}),
+    engineStatus:()=>Promise.resolve({ok:true,running:!!window.__ENGINE_ON__,pid:window.__ENGINE_ON__?12345:0,uptime:window.__ENGINE_ON__?42:0,command:window.__LAUNCH__&&window.__LAUNCH__.command||'squeezelite',exitCode:null,logs:window.__ENGINE_LOGS__||['暂无日志'],binary:window.__LAUNCH__&&window.__LAUNCH__.binary||''}),
+    startEngine:()=>{ window.__ENGINE_ON__=true; window.__ENGINE_LOGS__=['$ squeezelite -n Sonora -o default','[12:00:01] 正在连接 LMS 192.168.199.2:9000...','[12:00:02] 已注册播放器，playerid=aa:bb:cc:dd:ee:ff','[12:00:03] 引擎运行中']; return Promise.resolve({ok:true,pid:12345,message:'squeezelite 已启动 (PID 12345)，正在注册到 LMS…'}); },
+    stopEngine:()=>{ window.__ENGINE_ON__=false; window.__ENGINE_LOGS__=['[已停止引擎]']; return Promise.resolve({ok:true,message:'squeezelite 已停止'}); },
     scanDevices:()=>Promise.resolve(window.__DEVICES__),
     saveDevice:(dev,host,short)=>{ window.__CFG__.device=dev; window.__CFG__.host_name=host; window.__CFG__.device_short=short; return Promise.resolve({ok:true,playerName:(host||'Mac')+' - '+(short||'')}); },
     getParams:()=>Promise.resolve(window.__PARAMS__),

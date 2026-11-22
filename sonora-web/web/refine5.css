@@ -70,3 +70,14 @@
 
 /* ---- 设备行图标统一（去掉 emoji 扬声器，用小 SVG 风格符号）---- */
 .device-row .dev-ico{ color:var(--brand,#7cc7a6); opacity:.85; }
+
+/* ===== 引擎日志区（v2.0.2） ===== */
+.engine-log-wrap{ margin:10px 0; }
+.engine-log{ margin:6px 0 0; padding:10px 12px; max-height:180px; overflow:auto;
+  background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.08); border-radius:8px;
+  color:#8fd6c8; font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre-wrap; word-break:break-all; }
+.engine-dot.on{ background:#4ade80 !important; box-shadow:0 0 10px #4ade8080 !important; }
+
+/* 连接徽标：服务器已连但无播放器（警示色） */
+.conn-badge.noplayer{ background:rgba(245,158,11,.15) !important; color:#fbbf24 !important; border-color:rgba(245,158,11,.35) !important; }
