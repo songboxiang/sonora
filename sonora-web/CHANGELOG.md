@@ -5,6 +5,14 @@
 的 bridge 标记，并打附注标签 `vX.Y.Z`。
 
 
+
+## v2.0.3 (2026-11-22) — 内置 squeezelite + 真更新 + 系统级开机自启
+
+- **内置二进制**：文本型 .app 首次启动自动探测本机 squeezelite 并复制到 app 内（`SQUEEZELITE_GUI_BINARY` 环境变量注入）；PyInstaller 版 build_app.sh 打包时内置二进制；main.py 兼容三种运行形态的资源定位。
+- **一键更新**：新增 `upgradeSqueezelite` API，从版本源查最新版 → 下载解压/挂载 DMG → 备份旧版 → 就地替换 → 自动重启引擎；更新页新增「立即更新 squeezelite」按钮 + 实时日志。
+- **系统级开机自启**：`setAutoStart` 从"只存配置"改为生成/卸载 macOS LaunchAgent（RunAtLoad+KeepAlive），开机后独立拉起 squeezelite 并注册到 LMS，不依赖 app 打开；新增 `getAutoStartStatus` 回显真实安装/加载状态。
+- Bridge API 51 → 53 方法。
+
 ## v2.0.2 (2026-11-22) — 修复「能连服务器却放不了歌」根因：补齐播放器引擎启动
 
 **核心修复**：Web 版此前只有「遥控端」能力，缺少 Tk 版最关键的「启动 squeezelite 播放器并注册到 LMS」环节，导致 LMS 上没有播放器在线——所有播放器级命令（播放下发/静音/音量/进度/封面）都被 LMS 断连。本版本补齐完整进程管理闭环。

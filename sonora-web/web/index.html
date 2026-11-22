@@ -203,7 +203,7 @@
           </div>
           <div class="cmd-preview"><span class="overline">启动命令</span><code id="engineCmd">—</code></div>
           <div class="engine-log-wrap"><span class="overline">引擎日志</span><pre class="engine-log" id="engineLog">暂无日志</pre></div>
-          <label class="switch-row"><span>开机自动启动</span><input type="checkbox" id="autoStart"><i></i></label>
+          <label class="switch-row"><span>开机自动启动引擎（系统级）<small class="hint" id="autoStartHint" style="margin-left:8px"></small></span><input type="checkbox" id="autoStart"><i></i></label>
         </div>
       </div>
     </section>
@@ -235,7 +235,11 @@
           <div class="ver-item"><span>当前 squeezelite</span><b id="verLocal">—</b></div>
           <div class="ver-item"><span>最新 squeezelite</span><b id="verLatest">—</b></div>
           <div class="ver-item"><span>架构</span><b id="verArch">—</b></div>
-          <span class="spacer"></span><button class="btn primary" id="checkUpdates">检查更新</button>
+          <span class="spacer"></span><button class="btn" id="checkUpdates">检查更新</button><button class="btn primary" id="doUpgrade">⟳ 立即更新 squeezelite</button>
+        </div>
+        <div class="card">
+          <div class="row-between"><b>更新进度</b><span class="overline" id="upgradeVer">—</span></div>
+          <pre class="engine-log" id="upgradeLog">尚未更新。点击「立即更新 squeezelite」下载并替换内置二进制（旧版自动备份）。</pre>
         </div>
         <div class="card">
           <div class="row-between"><div><b>更新日志</b></div><button class="btn" id="logRefresh">刷新</button></div>

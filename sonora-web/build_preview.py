@@ -107,7 +107,7 @@ window.__LAUNCH__ = {binary:'/opt/homebrew/bin/squeezelite', command:'squeezelit
 window.__FAV_IDS__ = ['t1','t3'];
 window.__QUEUE__ = {items:window.__QUEUE_ITEMS__,index:0,mode:'0 0',ok:true};
 window.__DRILL__ = {};
-window.__UPDATES__ = {local:'v2.0.2', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
+window.__UPDATES__ = {local:'v2.0.3', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
 window.__CHANGELOG__ = {items:[],source:'preview'};
 (function(){
   const base = {
@@ -176,6 +176,9 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     getParams:()=>Promise.resolve(window.__PARAMS__),
     applyBestParams:()=>{ window.__PARAMS__.values={'device_args':'100:0','rates':'44100-384000','buffer':'8192:8192'}; return Promise.resolve({ok:true,applied:window.__PARAMS__.values,preview:window.__PARAMS__.preview}); },
     toggleMute:()=>{ window.__MUTED__=!window.__MUTED__; return Promise.resolve({ok:true,muted:window.__MUTED__,volume:window.__MUTED__?0:60}); },
+    setAutoStart:(on)=>{ window.__AUTOSTART__=!!on; return Promise.resolve({ok:true,autoStart:!!on,message:on?'已设置开机自启（已立即生效）':'已关闭开机自启'}); },
+    getAutoStartStatus:()=>Promise.resolve({ok:true,enabled:!!window.__AUTOSTART__,installed:!!window.__AUTOSTART__,loaded:!!window.__AUTOSTART__,plist:'~/Library/LaunchAgents/com.squeezelite.gui.plist',isMac:true}),
+    upgradeSqueezelite:()=>{ return Promise.resolve({ok:true,version:'2.0.0.1465',message:'已升级为 2.0.0.1465',logs:['→ 查询最新版本...','✓ 命中源 SourceForge','已下载 squeezelite-2.0.0.1465-osx-m1.tar.gz (8.42 MB)','已备份旧版 → ~/.squeezelite_gui/backups/squeezelite.20261122-224500.bak','已升级为 2.0.0.1465','升级后已自动重启引擎']}); },
     getLaunchInfo:()=>Promise.resolve(window.__LAUNCH__),
     setVolume:(v)=>Promise.resolve({ok:true}),
     getCover:()=>Promise.resolve(window.__COVER__)

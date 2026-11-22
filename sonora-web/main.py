@@ -14,10 +14,40 @@ def resource_path(rel):
 
 sys.path.insert(0, resource_path("backend"))
 
+# ---- 定位内置 squeezelite 二进制并注入环境变量（供 find_binary 优先识别）----
+# 兼容三种形态：
+#   1) 源码运行：HERE/squeezelite
+#   2) 文本型 .app：launcher 已注入 SQUEEZELITE_GUI_BINARY，且资源在 ../Resources
+#   3) PyInstaller 冻结：sys._MEIPASS 与 App bundle 的 MacOS/Resources
+def _probe_bundled_squeezelite():
+    if os.environ.get("SQUEEZELITE_GUI_BINARY"):
+        return  # launcher 已指定，尊重之
+    cands = [
+        resource_path("squeezelite"),
+        os.path.join(HERE, "squeezelite"),
+        os.path.join(HERE, "..", "MacOS", "squeezelite"),
+        os.path.join(HERE, "..", "Resources", "squeezelite"),
+    ]
+    # PyInstaller: 可执行文件在 Contents/MacOS，资源在 Contents/Resources
+    mf = getattr(sys, "_MEIPASS", None)
+    if mf:
+        cands += [os.path.join(mf, "squeezelite"),
+                  os.path.join(os.path.dirname(mf), "MacOS", "squeezelite"),
+                  os.path.join(os.path.dirname(mf), "Resources", "squeezelite")]
+        # sys.executable 在 Contents/MacOS/<app>
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        cands += [os.path.join(exe_dir, "squeezelite"),
+                  os.path.join(exe_dir, "..", "Resources", "squeezelite")]
+    for p in cands:
+        if p and os.path.isfile(p) and os.access(p, os.X_OK):
+            os.environ["SQUEEZELITE_GUI_BINARY"] = os.path.abspath(p)
+            break
+_probe_bundled_squeezelite()
+
 import webview
 from api import api as bridge_api
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 
 def main():

@@ -489,7 +489,16 @@
     if(info){
       if($("engineVer")) $("engineVer").textContent = info.version?("squeezelite "+info.version):(info.binary||"未找到 squeezelite 可执行文件");
       if($("engineCmd")) $("engineCmd").textContent = info.command||"—";
-      if($("autoStart")) $("autoStart").checked = !!info.autoRun;
+      // 系统级开机自启真实状态（LaunchAgent）
+      try{
+        const ast=await apiCall("getAutoStartStatus",null);
+        if(ast){
+          if($("autoStart")) $("autoStart").checked=!!(ast.enabled&&ast.installed);
+          if($("autoStartHint")) $("autoStartHint").textContent=
+            !ast.isMac?"（仅 macOS 支持）":
+            (ast.installed?(ast.loaded?"已安装并生效":"已安装，下次登录生效"):"未安装");
+        }
+      }catch(e){}
     }
     const scan=await apiCall("scanDevices", window.__DEVICES__||{devices:[],reasons:[],binary:""});
     renderDevices(scan);
@@ -575,7 +584,14 @@
     finally{ btn.textContent=oldTxt; btn.disabled=false; engineBusy=false; }
   });
   if($("autoStart")) $("autoStart").addEventListener("change",async e=>{
-    await apiCall("setAutoStart",{ok:true},e.target.checked); toast("已更新开机自启");
+    const want=e.target.checked;
+    const r=await apiCall("setAutoStart",{ok:false,error:"后端未连接"},want);
+    if(r&&r.ok===false){
+      e.target.checked=!want;
+      toast("设置失败："+(r.error||"").split("\n")[0]); return;
+    }
+    toast(r&&r.message||(want?"已设置开机自启":"已关闭开机自启"));
+    if($("autoStartHint")) $("autoStartHint").textContent=want?"已安装并生效":"未安装";
   });
 
   // ---- 多端同播 ----
@@ -779,6 +795,21 @@
   });
   if($("autoUpgrade")) $("autoUpgrade").addEventListener("change",async e=>{
     await apiCall("setAutoUpgrade",{ok:true},e.target.checked); toast("已更新自动检查设置");
+  });
+  // 立即更新 squeezelite：下载并就地替换内置/本机二进制
+  let upgrading=false;
+  if($("doUpgrade")) $("doUpgrade").addEventListener("click",async()=>{
+    if(upgrading) return;
+    const btn=$("doUpgrade"); const oldTxt=btn.textContent;
+    upgrading=true; btn.textContent="更新中…"; btn.disabled=true;
+    if($("upgradeLog")) $("upgradeLog").textContent="正在查询最新版本并下载，请稍候（可能需要 1-3 分钟）…";
+    try{
+      const r=await apiCall("upgradeSqueezelite",{ok:false,error:"后端未连接"});
+      if($("upgradeLog")) $("upgradeLog").textContent=(r&&r.logs&&r.logs.length)?r.logs.join("\n"):(r&&r.message)||(r&&r.error)||"无日志";
+      if(r&&r.ok===false){ toast("更新失败："+(r.error||"").split("\n")[0]); }
+      else{ toast("squeezelite 更新成功"+(r&&r.version?(" · "+r.version):"")); await loadUpdatePage(); }
+    }catch(e){ toast("更新异常："+String(e).slice(0,60)); }
+    finally{ btn.textContent=oldTxt; btn.disabled=false; upgrading=false; }
   });
 
   /* ================= 收藏体系 / 面板缩放 ================= */

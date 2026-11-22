@@ -43,7 +43,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.2"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.3"}
 
 
 @_wrap
@@ -454,9 +454,73 @@ def getLaunchInfo():
 
 @_wrap
 def setAutoStart(on=False):
-    CFG["auto_start"] = bool(on)
+    """真实开机自启：生成/卸载 macOS LaunchAgent，独立拉起 squeezelite。
+
+    开启时用当前参数构建 argv，写入 ~/Library/LaunchAgents/，RunAtLoad+KeepAlive，
+    这样即使 app 未打开，开机后也会自动启动 squeezelite 引擎并注册到 LMS。
+    """
+    on = bool(on)
+    CFG["auto_start"] = on
     c.save_config(CFG)
-    return {"ok": True, "autoStart": bool(on)}
+    if not on:
+        # 卸载：先 unload 再删 plist
+        try:
+            import subprocess as _sp
+            if os.path.exists(c.LAUNCH_AGENT):
+                _sp.run(["launchctl", "unload", c.LAUNCH_AGENT],
+                        capture_output=True, timeout=10)
+                os.remove(c.LAUNCH_AGENT)
+                return {"ok": True, "autoStart": False,
+                        "message": "已卸载开机自启（LaunchAgent 已移除）"}
+        except Exception as e:
+            return {"ok": False, "error": "卸载开机自启失败: %s" % str(e)[:150]}
+        return {"ok": True, "autoStart": False, "message": "开机自启已关闭"}
+    # 开启：校验参数并构建 argv
+    values = {}
+    for pdef in c.PARAMS:
+        k = pdef["key"]
+        values[k] = CFG.get(k, pdef.get("default", ""))
+    problems = c.validate_all(values, CFG.get("extra", ""))
+    if problems:
+        return {"ok": False, "error": "参数未通过校验，无法设置开机自启：\n" + "\n".join(problems)}
+    argv = c.build_argv(CFG, values)
+    binary = argv[0]
+    if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
+        return {"ok": False,
+                "error": "找不到可执行的 squeezelite：%s\n请先在「播放器引擎」页指定二进制路径或更新安装。" % binary}
+    ok, msg = c.make_launch_agent(CFG, argv, None)
+    if not ok:
+        return {"ok": False, "error": msg}
+    # 立即 load，使本次登录即生效（无需重启）
+    try:
+        import subprocess as _sp
+        _sp.run(["launchctl", "unload", c.LAUNCH_AGENT], capture_output=True, timeout=10)
+        r = _sp.run(["launchctl", "load", c.LAUNCH_AGENT], capture_output=True, text=True, timeout=10)
+        loaded = (r.returncode == 0)
+        extra = "（已立即生效）" if loaded else "（下次登录生效：%s）" % (r.stderr or "")[:80]
+    except Exception:
+        extra = "（下次登录生效）"
+    return {"ok": True, "autoStart": True,
+            "message": "已设置开机自启 %s" % extra,
+            "plist": c.LAUNCH_AGENT, "command": c.preview_cmd(argv)}
+
+
+@_wrap
+def getAutoStartStatus():
+    """查询系统级开机自启状态（LaunchAgent 是否存在且已加载）。"""
+    installed = os.path.exists(c.LAUNCH_AGENT)
+    loaded = False
+    if installed:
+        try:
+            import subprocess as _sp
+            r = _sp.run(["launchctl", "list", "com.squeezelite.gui"],
+                        capture_output=True, timeout=6)
+            loaded = (r.returncode == 0)
+        except Exception:
+            loaded = False
+    return {"ok": True, "enabled": bool(CFG.get("auto_start")),
+            "installed": installed, "loaded": loaded,
+            "plist": c.LAUNCH_AGENT, "isMac": c.IS_MAC}
 
 
 @_wrap
@@ -490,6 +554,51 @@ def setAutoUpgrade(on=False):
     CFG["auto_upgrade_check"] = bool(on)
     c.save_config(CFG)
     return {"ok": True, "autoUpgrade": bool(on)}
+
+
+@_wrap
+def upgradeSqueezelite():
+    """下载最新版本并就地替换 squeezelite 二进制（旧版自动备份）。
+
+    从版本源重新查询最新 item，避免信任前端传入的下载地址。
+    升级完成后若引擎正在运行，自动重启引擎使新二进制生效。
+    """
+    if not c.IS_MAC:
+        return {"ok": False, "error": "自动更新 squeezelite 仅支持 macOS（当前 %s）" % sys.platform}
+    logs = []
+    def _log(msg):
+        txt = str(msg)
+        logs.append(txt)
+        if len(logs) > 80:
+            del logs[:-80]
+    try:
+        latest = c.sq_latest(_log, CFG)
+        item = (latest.get("latest") or {})
+        if not item.get("url"):
+            return {"ok": False, "error": "未取得二进制下载地址（版本源降级）。请到 SourceForge 手动下载。",
+                    "logs": logs}
+        was_running = _engine_alive()
+        if was_running:
+            try:
+                stopEngine()
+                _log("升级前已暂停引擎")
+            except Exception:
+                pass
+        ok, msg = c.upgrade_squeezelite(CFG, item, _log)
+        if ok and was_running:
+            try:
+                time.sleep(0.5)
+                r = startEngine()
+                if r.get("ok"):
+                    _log("升级后已自动重启引擎")
+                else:
+                    _log("升级成功，但引擎重启失败：%s" % r.get("error", ""))
+            except Exception as e:
+                _log("引擎重启异常: %s" % e)
+        return {"ok": bool(ok), "message": msg, "logs": logs,
+                "version": (c.sq_local_version(c.find_binary(CFG) or "", None) or {}).get("version", "")}
+    except Exception as e:
+        return {"ok": False, "error": "升级异常: %s" % str(e)[:200], "logs": logs}
 
 
 # ================= 多端同播（LMS sync group）=================
@@ -1046,6 +1155,8 @@ class BridgeAPI:
     def saveParams(self, values=None, extra=""): return saveParams(values, extra)
     def getLaunchInfo(self): return getLaunchInfo()
     def setAutoStart(self, on=False): return setAutoStart(on)
+    def getAutoStartStatus(self): return getAutoStartStatus()
+    def upgradeSqueezelite(self): return upgradeSqueezelite()
     def checkUpdates(self): return checkUpdates()
     def getChangeLog(self, kind="sl"): return getChangeLog(kind)
     def setAutoUpgrade(self, on=False): return setAutoUpgrade(on)

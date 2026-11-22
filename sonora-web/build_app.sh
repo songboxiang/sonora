@@ -54,6 +54,23 @@ if [ -e "$APP_DIR" ]; then
   mv "$APP_DIR" "$BAK"
 fi
 
+# ---------- 3.5 查找本机 squeezelite 二进制（用于内置） ----------
+SL_BIN=""
+for c in "$SQUEEZELITE_GUI_BINARY" \
+         "$HOME/Applications/Squeezelite/Squeezelite/Squeezelite" \
+         "$HOME/Applications/Squeezelite/Squeezelite/squeezelite" \
+         /opt/homebrew/bin/squeezelite /usr/local/bin/squeezelite \
+         /usr/bin/squeezelite "$HOME/bin/squeezelite" \
+         /Applications/Squeezelite/squeezelite; do
+  if [ -n "$c" ] && [ -x "$c" ]; then SL_BIN="$c"; break; fi
+done
+[ -n "$SL_BIN" ] || SL_BIN="$(command -v squeezelite 2>/dev/null || true)"
+if [ -n "$SL_BIN" ] && [ -x "$SL_BIN" ]; then
+  say "squeezelite 二进制: $SL_BIN （将内置到 app）"
+else
+  say "警告：未找到本机 squeezelite，app 将不含二进制。可在「升级与更新」页在线安装。"
+fi
+
 # ---------- 4. PyInstaller 打包 ----------
 say "PyInstaller 打包中（首次约 1-3 分钟）…"
 [ -f "$ICON" ] || err "缺少图标 $ICON"
@@ -73,6 +90,18 @@ rm -rf build dist Sonora.spec
   main.py || err "PyInstaller 打包失败"
 
 [ -d "dist/$APP_NAME.app" ] || err "未找到产物 dist/$APP_NAME.app"
+
+# 内置二进制到 app（放在 Resources 与 MacOS 两处，find_binary 都能找到）
+if [ -n "$SL_BIN" ] && [ -x "$SL_BIN" ]; then
+  APP_RES="dist/$APP_NAME.app/Contents/Resources"
+  APP_MAC="dist/$APP_NAME.app/Contents/MacOS"
+  mkdir -p "$APP_RES" "$APP_MAC"
+  cp "$SL_BIN" "$APP_RES/squeezelite" && chmod +x "$APP_RES/squeezelite"
+  cp "$SL_BIN" "$APP_MAC/squeezelite" && chmod +x "$APP_MAC/squeezelite"
+  xattr -d com.apple.quarantine "$APP_RES/squeezelite" 2>/dev/null || true
+  xattr -d com.apple.quarantine "$APP_MAC/squeezelite" 2>/dev/null || true
+  say "已内置 squeezelite 到 app"
+fi
 
 # ---------- 5. 安装到 ~/Applications ----------
 mkdir -p "$HOME/Applications"
