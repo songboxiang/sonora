@@ -1,0 +1,255 @@
+/* ============================================================
+   Sonora 颂诺 · 视觉精修层 v0.3
+   目标：去除塑料感，走向「高保真音响」质感——真实光影、细腻材质、克制配色
+   本文件独立覆盖，可整体删除回退到 v0.2 基础样式
+   ============================================================ */
+
+/* ---------- 1. 全局字体渲染：让文字更细腻 ---------- */
+html, body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+[data-theme="dark"] {
+  --shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 10px 40px rgba(0,0,0,.5);
+  --shadow-sm: 0 1px 0 rgba(255,255,255,.03) inset, 0 3px 14px rgba(0,0,0,.32);
+  --card-border: rgba(124,199,166,.10);
+}
+
+/* ---------- 2. 顶栏：细腻的玻璃与品牌辉光 ---------- */
+.topbar {
+  background: linear-gradient(180deg, var(--surface), var(--bg));
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 6px 24px rgba(0,0,0,.28);
+}
+.brand-logo { filter: drop-shadow(0 0 6px rgba(124,199,166,.35)); }
+.brand-zh { letter-spacing:.6px; }
+.icon-btn { box-shadow: 0 1px 0 rgba(255,255,255,.05) inset; }
+.icon-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 rgba(255,255,255,.1) inset, 0 6px 16px rgba(0,0,0,.28);
+}
+
+/* ---------- 3. 音乐库卡片：材质层次 + 封面光影 ---------- */
+.lib-item.grid {
+  background: linear-gradient(158deg, var(--card), var(--surface2));
+  border: 1px solid var(--card-border);
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, var(--shadow-sm);
+  padding: 11px;
+}
+.lib-item.grid:hover {
+  border-color: rgba(124,199,166,.55);
+  box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 14px 34px rgba(0,0,0,.4), 0 0 0 1px rgba(124,199,166,.22);
+  transform: translateY(-3px);
+}
+.lib-item .thumb {
+  box-shadow: 0 0 0 1px rgba(255,255,255,.07) inset, 0 6px 18px rgba(0,0,0,.32);
+}
+.lib-item .thumb img { transition: transform .35s cubic-bezier(.2,.8,.2,1); }
+.lib-item.grid:hover .thumb img { transform: scale(1.04); }
+.lib-item .it-title { font-size:13px; letter-spacing:.2px; }
+.lib-item .idx {
+  background: rgba(0,0,0,.55); backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,.1); font-weight:600;
+}
+
+/* 首字母栏：更清晰的可用/高亮态 */
+.alpha-bar { background:linear-gradient(90deg,transparent,rgba(8,31,34,.28)); border-radius:8px; }
+.alpha-bar button { height:16px; line-height:16px; font-size:10px; }
+.alpha-bar button.on {
+  background:var(--primary); color:var(--on-primary);
+  box-shadow:0 0 12px rgba(124,199,166,.5), 0 2px 6px rgba(0,0,0,.3);
+}
+.alpha-tip { box-shadow:0 12px 30px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.12) inset; }
+
+/* 分类/搜索/排序工具条 */
+.lib-cats button.on { box-shadow:0 1px 0 rgba(255,255,255,.06) inset, var(--shadow-sm); }
+.lib-search-wrap input { box-shadow:0 1px 3px rgba(0,0,0,.18) inset; }
+.lib-search-wrap input:focus { box-shadow:0 0 0 3px rgba(124,199,166,.14), 0 1px 3px rgba(0,0,0,.18) inset; }
+
+/* ---------- 4. mini 播放器：玻璃质感 + 发光进度 ---------- */
+.mini-player {
+  background:linear-gradient(180deg, rgba(15,44,47,.86), rgba(8,31,34,.94));
+  backdrop-filter:var(--glass); -webkit-backdrop-filter:var(--glass);
+  border-top:1px solid rgba(124,199,166,.18);
+  box-shadow:0 -10px 34px rgba(0,0,0,.32), 0 1px 0 rgba(255,255,255,.04) inset;
+}
+.mini-cover { box-shadow:0 4px 14px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.1) inset; }
+.mini-title { font-size:13.5px; letter-spacing:.2px; }
+.mini-progress { height:5px; box-shadow:0 1px 2px rgba(0,0,0,.3) inset; }
+.mini-progress i {
+  background:linear-gradient(90deg,#7cc7a6,#b9e6cf,#dcb96a);
+  box-shadow:0 0 10px rgba(124,199,166,.55);
+  position:relative;
+}
+.mini-progress i::after {
+  content:""; position:absolute; right:-3px; top:50%; transform:translateY(-50%);
+  width:8px; height:8px; border-radius:50%; background:#e8f6ef;
+  box-shadow:0 0 10px rgba(232,246,239,.9);
+}
+.mini-ctrl.play { box-shadow:0 0 16px rgba(124,199,166,.42), 0 1px 0 rgba(255,255,255,.2) inset; }
+
+/* ---------- 5. 常规播放器 ---------- */
+.player-bg {
+  opacity:.52; filter:blur(72px) saturate(165%); transform:scale(1.08);
+}
+.player-bg::after {
+  background:linear-gradient(135deg, rgba(8,31,34,.32), rgba(8,31,34,.70));
+}
+.player-cover {
+  border-radius:20px;
+  border:1px solid rgba(255,255,255,.2);
+  box-shadow:
+    0 28px 64px rgba(0,0,0,.6),
+    0 0 0 7px rgba(255,255,255,.035),
+    0 1px 0 rgba(255,255,255,.22) inset;
+}
+.player-title {
+  font-size:36px; font-weight:750; letter-spacing:-.6px;
+  text-shadow:0 3px 24px rgba(0,0,0,.45);
+}
+.player-artist { color:rgba(255,255,255,.86); font-size:17px; letter-spacing:.2px; }
+.player-album { color:rgba(255,255,255,.5); letter-spacing:.4px; text-transform:uppercase; font-size:11px; }
+
+/* 进度条：金属槽 + 发光填充 + 端点 */
+.player-progress .pbar {
+  height:7px; background:rgba(255,255,255,.13);
+  box-shadow:0 1px 3px rgba(0,0,0,.35) inset, 0 1px 0 rgba(255,255,255,.05);
+}
+.player-progress .pbar i {
+  background:linear-gradient(90deg,#7cc7a6,#b9e6cf 55%,#dcb96a);
+  box-shadow:0 0 14px rgba(124,199,166,.6); position:relative;
+}
+.player-progress .pbar i::after {
+  content:""; position:absolute; right:-4px; top:50%; transform:translateY(-50%);
+  width:10px; height:10px; border-radius:50%; background:#eef8f2;
+  box-shadow:0 0 12px rgba(238,248,242,.95), 0 1px 3px rgba(0,0,0,.4);
+}
+
+/* 传输按钮：立体质感 */
+.player-transport button {
+  box-shadow:0 1px 0 rgba(255,255,255,.12) inset, 0 6px 16px rgba(0,0,0,.28);
+  transition:.18s cubic-bezier(.2,.8,.2,1);
+}
+.player-transport button:hover { transform:translateY(-2px); }
+.player-transport button.primary {
+  background:linear-gradient(160deg,#93dcb9,#6bb598);
+  box-shadow:0 0 22px rgba(124,199,166,.5), 0 1px 0 rgba(255,255,255,.35) inset, 0 6px 18px rgba(0,0,0,.3);
+  border-color:transparent;
+}
+.panel-toggles button { box-shadow:0 1px 0 rgba(255,255,255,.05) inset; }
+.panel-toggles button.on {
+  background:linear-gradient(160deg,rgba(124,199,166,.28),rgba(124,199,166,.14));
+  box-shadow:0 0 12px rgba(124,199,166,.2), 0 1px 0 rgba(255,255,255,.08) inset;
+}
+
+/* LED 点阵屏：金属边框 + 扫描线 + 荧光点阵 */
+.led {
+  border-radius:14px; padding:5px;
+  background:linear-gradient(150deg,#1c2922,#0b1310 55%,#172019);
+  box-shadow:
+    0 1px 1px rgba(255,255,255,.14) inset,
+    0 -1px 2px rgba(0,0,0,.7) inset,
+    0 10px 24px rgba(0,0,0,.5),
+    0 0 0 1px rgba(0,0,0,.55);
+  position:relative;
+}
+.led::before {
+  content:""; position:absolute; inset:5px; border-radius:10px; pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent 0,transparent 2px,rgba(0,0,0,.13) 2px,rgba(0,0,0,.13) 4px);
+  z-index:1;
+}
+.led-screen {
+  background:radial-gradient(ellipse at 50% -10%,#12261b,#08110d 72%);
+  border:1px solid #26452f;
+  box-shadow:0 0 26px rgba(0,0,0,.85) inset, 0 1px 0 rgba(124,224,160,.1) inset;
+  border-radius:10px; padding:14px 16px;
+}
+.led-row b { color:#95f2b8; text-shadow:0 0 6px rgba(149,242,184,.8), 0 0 14px rgba(149,242,184,.35); }
+.led-status { color:#f2c95e; text-shadow:0 0 8px rgba(242,201,94,.65); }
+.led-status.ok { color:#95f2b8; text-shadow:0 0 8px rgba(149,242,184,.65); }
+
+/* 面板卡片：更通透的毛玻璃 */
+.ppanel {
+  background:rgba(9,30,32,.5);
+  border:1px solid rgba(255,255,255,.11);
+  box-shadow:0 1px 0 rgba(255,255,255,.05) inset, 0 10px 26px rgba(0,0,0,.25);
+  backdrop-filter:blur(14px);
+}
+.ppanel-head { letter-spacing:.5px; }
+
+/* ---------- 6. 专注大屏模式 ---------- */
+.focus-bg { opacity:.56; filter:blur(88px) saturate(175%); transform:scale(1.14); }
+.focus-bg::after { background:linear-gradient(120deg,rgba(6,18,20,.42),rgba(6,18,20,.72)); }
+.focus-cover {
+  border:1px solid rgba(255,255,255,.32);
+  border-radius:14px;
+  box-shadow:
+    0 34px 84px rgba(0,0,0,.68),
+    0 0 0 10px rgba(255,255,255,.035),
+    0 1px 0 rgba(255,255,255,.25) inset;
+}
+.focus-title { font-size:46px; font-weight:750; letter-spacing:-1px; text-shadow:0 4px 32px rgba(0,0,0,.5); }
+.focus-artist { color:rgba(255,255,255,.78); letter-spacing:.4px; }
+.flyric.cur {
+  font-size:29px; text-shadow:0 0 32px rgba(165,230,200,.6);
+}
+.focus-aside {
+  background:rgba(9,24,26,.68);
+  border:1px solid rgba(255,255,255,.13);
+  box-shadow:0 20px 50px rgba(0,0,0,.4), 0 1px 0 rgba(255,255,255,.05) inset;
+  backdrop-filter:blur(18px);
+}
+.focus-pbar { height:5px; box-shadow:0 1px 3px rgba(0,0,0,.4) inset; }
+.focus-pbar i {
+  background:linear-gradient(90deg,#7cc7a6,#b9e6cf 55%,#dcb96a);
+  box-shadow:0 0 12px rgba(124,199,166,.6);
+}
+.focus-ctrls button.play {
+  box-shadow:0 0 34px rgba(255,255,255,.28), 0 10px 26px rgba(0,0,0,.45), 0 1px 0 rgba(255,255,255,.6) inset;
+}
+
+/* ---------- 7. 设置页：卡片与开关质感 ---------- */
+.card {
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset, var(--shadow-sm);
+}
+[data-theme="dark"] .card {
+  background:linear-gradient(160deg,var(--card),var(--surface2));
+}
+.btn.primary {
+  background:linear-gradient(160deg,var(--primary),var(--primary-dark));
+  box-shadow:0 0 0 1px rgba(255,255,255,.1) inset, 0 6px 18px rgba(47,107,82,.35);
+  border-color:transparent;
+}
+.btn:hover { transform:translateY(-1px); }
+.switch-row input:checked + i { box-shadow:0 0 12px rgba(124,199,166,.4); }
+
+/* ---------- 8. 首页入口卡片 ---------- */
+.home-card { transition:.2s cubic-bezier(.2,.8,.2,1); }
+.home-card:hover { transform:translateY(-3px); }
+
+/* ---------- 9. 精修补丁：氛围与歌词表现 ---------- */
+/* 专注封面：随环境光的柔和晕染 */
+.focus-cover-col { position:relative; }
+.focus-cover-col::after {
+  content:""; position:absolute; inset:12% 12% -6%; z-index:-1;
+  background:radial-gradient(ellipse at center,rgba(124,199,166,.18),transparent 70%);
+  filter:blur(28px); pointer-events:none;
+}
+/* 歌词区：上下渐隐 + 当前句更聚焦 */
+.focus-lyrics {
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 14%,#000 84%,transparent);
+  mask-image:linear-gradient(180deg,transparent,#000 14%,#000 84%,transparent);
+}
+.flyric { font-size:20px; color:rgba(255,255,255,.28); }
+.flyric.cur {
+  font-size:31px; color:#fff; font-weight:750;
+  text-shadow:0 0 34px rgba(165,230,200,.7), 0 2px 8px rgba(0,0,0,.4);
+}
+/* 大屏标题自适应放大 */
+@media (min-width:1400px){
+  .focus-title { font-size:52px; }
+  .player-title { font-size:38px; }
+}
+/* 当前播放行：更明确的高亮 */
+.pl-row.cur { box-shadow:0 0 0 1px rgba(124,199,166,.28) inset; }
+.pl-row.cur .pl-t { color:#a5e6c8; font-weight:600; }

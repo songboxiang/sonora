@@ -1,0 +1,43 @@
+/* Design tokens — 源自 docs/design/design-tokens.json v1.1 + v1.6.0 THEMES */
+:root {
+  --bg:#FAFAFA; --topbar:#FFFFFF; --surface:#FFFFFF; --surface2:#F5F8F6;
+  --card:#FFFFFF; --card-border:#E0E7E3; --border:#E0E7E3; --divider:#E4EAE7;
+  --text:#1B2A26; --text2:#53655E; --text3:#8E9B95;
+  --primary:#2F6B52; --primary-dark:#2A5F49; --on-primary:#FFFFFF;
+  --accent:#2F6B52; --brand:#589E81; --on-accent:#FFFFFF;
+  --ok:#3E7D62; --warn:#9A6100; --error:#B5352B;
+  --sel:#E2F0EA; --sel-text:#2F6B52; --hover:#EEF5F1; --selected:#E2F0EA;
+  --disabled:#8E9B95; --link:#2F6B52; --cover-pad:#E9EEF0;
+  --prog-bg:#DCE5E0; --prog-fg:#589E81;
+  --scroll:#E0E7E3; --scroll-active:#2F6B52;
+  --fs-hero:42px; --fs-hero-focus:56px; --fs-title:24px; --fs-subtitle:17px;
+  --fs-body:14px; --fs-caption:12px; --fs-overline:10px;
+  --radius:12px; --radius-sm:8px; --radius-lg:16px;
+  --shadow:0 8px 32px rgba(27,42,38,.10);
+  --shadow-sm:0 2px 10px rgba(27,42,38,.06);
+  --glass:blur(24px) saturate(150%);
+  --font:"PingFang SC","Noto Sans CJK SC","SF Pro Display",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+[data-theme="dark"] {
+  --bg:#081F22; --topbar:#0D292D; --surface:#0D292D; --surface2:#0F2C2F;
+  --card:#0D292D; --card-border:#22444A; --border:#22444A; --divider:#22444A;
+  --text:#EAF3EF; --text2:#A6BDB6; --text3:#6E8984;
+  --primary:#7CC7A6; --primary-dark:#6DB99A; --on-primary:#081F22;
+  --accent:#7CC7A6; --brand:#6CAC92; --on-accent:#081F22;
+  --ok:#7CC7A6; --warn:#E9B15C; --error:#F0857A;
+  --sel:#17453E; --sel-text:#EAF3EF; --hover:#153A3C; --selected:#17453E;
+  --disabled:#6E8984; --link:#7CC7A6; --cover-pad:#12332F;
+  --prog-bg:#22444A; --prog-fg:#6CAC92;
+  --scroll:#22444A; --scroll-active:#7CC7A6;
+  --shadow:0 8px 32px rgba(0,0,0,.45);
+  --shadow-sm:0 2px 10px rgba(0,0,0,.3);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; }
+body { font-family:var(--font); background:var(--bg); color:var(--text);
+  font-size:var(--fs-body); line-height:1.55; overflow:hidden;
+  transition:background .25s,color .25s; }
+button { font-family:inherit; cursor:pointer; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--scroll); border-radius:6px; }
+::-webkit-scrollbar-thumb:hover { background:var(--scroll-active); }

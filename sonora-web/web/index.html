@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Sonora 颂诺 · 高保真播放器</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="refine.css">
+<link rel="stylesheet" href="refine2.css">
+<link rel="stylesheet" href="refine3.css">
+<link rel="stylesheet" href="refine4.css">
+</head>
+<body>
+<div class="app">
+  <!-- 顶栏：主页只有品牌 + 设置齿轮 -->
+  <header class="topbar" id="topbar">
+    <button class="back-bar" id="backBar" hidden>‹ 返回</button>
+    <span class="brand" id="brandName">
+      <img class="brand-logo" src="assets/logo-mark.svg" alt="">
+      <span class="brand-zh">Sonora <em>颂诺</em></span>
+    </span>
+    <span class="brand-sub" id="connText">未连接</span>
+    <span class="spacer"></span>
+    <button class="icon-btn settings-btn" id="settingsBtn" title="设置" aria-label="设置">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M19.14 12.94a7.5 7.5 0 0 0 .05-.94 7.5 7.5 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7.3 7.3 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.73 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96a7.3 7.3 0 0 0 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7.3 7.3 0 0 0 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2Z"/></svg>
+    </button>
+    <!-- 设置下拉菜单 -->
+    <div class="settings-menu" id="settingsMenu" hidden>
+      <div class="sm-head">设置</div>
+      <button data-nav="server"><span class="sm-ico">⛁</span>服务器设置</button>
+      <button data-nav="launch"><span class="sm-ico">▣</span>播放器引擎</button>
+      <button data-nav="params"><span class="sm-ico">⚙</span>参数配置</button>
+      <button data-nav="update"><span class="sm-ico">⇩</span>升级与更新</button>
+      <div class="sm-sep"></div>
+      <button data-nav="help"><span class="sm-ico">?</span>帮助</button>
+      <div class="sm-sep"></div>
+      <div class="sm-theme">
+        <span>主题</span>
+        <div class="seg mini" id="themeSeg">
+          <button data-theme="light">浅</button>
+          <button data-theme="dark">深</button>
+          <button data-theme="system">自动</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main" id="main">
+    <div class="toast" id="toast"></div>
+
+    <!-- ============ 首页 ============ -->
+    <section class="page on" id="page-home">
+      <div class="home-wrap">
+        <!-- 音乐库卡片（默认主入口） -->
+        <div class="home-card lib-entry" id="libEntry" data-nav="lib">
+          <div class="home-card-ico">
+            <svg viewBox="0 0 24 24" width="40" height="40"><path fill="currentColor" d="M12 3 2 8l10 5 10-5-10-5Zm0 7.2L5.2 6.6 12 3.2l6.8 3.4L12 10.2ZM4 10.5v5.2c0 .9 3.6 2.8 8 2.8s8-1.9 8-2.8v-5.2l-8 4-8-4Zm0 7v2.8c0 .9 3.6 2.8 8 2.8s8-1.9 8-2.8v-2.8l-8 4-8-4Z"/></svg>
+          </div>
+          <div class="home-card-body">
+            <div class="home-card-title">音乐库</div>
+            <div class="home-card-sub" id="libHomeSub">浏览专辑、艺术家、曲目与流派</div>
+          </div>
+          <div class="home-card-arrow">›</div>
+        </div>
+
+        <!-- 启动脚本卡片 -->
+        <div class="home-card launch-entry" data-nav="launch">
+          <div class="home-card-ico">
+            <svg viewBox="0 0 24 24" width="40" height="40"><path fill="currentColor" d="M12 2a10 10 0 0 0-6 18c.5.4.8 1 .8 1.6 0 .8-.7 1.4-1.5 1.3-1.1-.1-2.2-.3-3.2-.7A10 10 0 1 0 12 2Zm-3.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm2.5 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm4-1a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6Zm2.3-4a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
+          </div>
+          <div class="home-card-body">
+            <div class="home-card-title">播放器引擎</div>
+            <div class="home-card-sub">启动脚本 · 进程管理</div>
+          </div>
+          <div class="home-card-arrow">›</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 音乐库页 ============ -->
+    <section class="page" id="page-lib">
+      <!-- 未配置引导 -->
+      <div class="lib-setup" id="libSetup" hidden>
+        <button class="add-lib-btn" id="addLibBtn" title="添加音乐库">＋</button>
+        <div class="lib-setup-title">还没有音乐库</div>
+        <div class="lib-setup-sub">添加 LMS 服务器以开始浏览你的音乐收藏</div>
+        <button class="btn primary" id="gotoServerBtn">添加服务器</button>
+      </div>
+
+      <div class="lib-wrap" id="libWrap">
+        <div class="lib-toolbar">
+          <div class="lib-cats" id="libCats">
+            <button data-cat="albums" class="on">专辑</button>
+            <button data-cat="artists">艺术家</button>
+            <button data-cat="titles">音乐</button>
+            <button data-cat="genres">流派</button>
+          </div>
+          <span class="spacer"></span>
+          <div class="lib-search-wrap">
+            <span class="search-ico">⌕</span>
+            <input id="libSearch" type="text" placeholder="搜索…" autocomplete="off">
+          </div>
+          <button class="icon-btn" id="libPlBtn" title="播放列表">▤</button>
+          <button class="icon-btn" id="sortBtn" title="排序">A↓Z</button>
+          <button class="icon-btn" id="viewBtn" title="切换视图">▦</button>
+        </div>
+        <div class="crumb-bar" id="crumbBar" hidden></div>
+        <div class="lib-info"><span id="libCount">—</span><span class="spacer"></span><span id="libHint" class="hint"></span></div>
+        <div class="lib-scroll-wrap">
+          <div class="lib-body" id="libBody">
+            <div class="lib-items" id="libItems"></div>
+          </div>
+          <div class="alpha-bar" id="alphaBar"></div>
+          <div class="alpha-tip" id="alphaTip"></div>
+        </div>
+      </div>
+
+      <!-- 音乐库内播放列表抽屉 -->
+      <div class="lib-pl-drawer" id="libPlDrawer" hidden>
+        <div class="lpd-head">
+          <b>播放列表</b>
+          <span class="spacer"></span>
+          <button class="lpd-x" id="libPlClose" title="关闭">×</button>
+        </div>
+        <div class="lpd-toolbar">
+          <select id="lpdSelect" title="选择播放列表"><option value="">当前队列</option></select>
+          <button id="lpdNew" title="新建播放列表">＋</button>
+          <button id="lpdDel" title="删除所选播放列表">🗑</button>
+          <button id="lpdRefresh" title="刷新">↻</button>
+        </div>
+        <div class="lpd-body" id="lpdBody">加载中…</div>
+        <div class="lpd-foot" id="lpdFoot">— 首</div>
+      </div>
+      <div class="lib-pl-mask" id="libPlMask" hidden></div>
+    </section>
+
+    <!-- ============ 服务器设置 ============ -->
+    <section class="page" id="page-server">
+      <div class="settings-wrap">
+        <div class="settings-head"><h2>服务器设置</h2><p class="muted">连接 LMS（Logitech Media Server）音乐服务器</p></div>
+        <div class="card form-card">
+          <div class="form-grid">
+            <label class="field"><span>服务器地址</span><input id="svHost" type="text" placeholder="192.168.1.100"></label>
+            <label class="field"><span>端口</span><input id="svPort" type="text" value="9000" placeholder="9000"></label>
+            <label class="field"><span>用户名 <em>可选</em></span><input id="svUser" type="text" placeholder="留空则不认证"></label>
+            <label class="field"><span>密码 <em>可选</em></span><input id="svPass" type="password" placeholder="••••••"></label>
+          </div>
+          <div class="form-actions">
+            <button class="btn" id="svTest">测试连接</button>
+            <button class="btn primary" id="svSave">保存设置</button>
+            <span class="test-result" id="svResult"></span>
+          </div>
+          <div class="field player-field"><span>默认播放器</span>
+            <select id="svPlayer"><option value="">自动选择</option></select>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 播放器引擎（设备与启动）============ -->
+    <section class="page" id="page-launch">
+      <div class="settings-wrap">
+        <div class="settings-head"><h2>播放器引擎</h2><p class="muted">管理 squeezelite 输出设备与启动</p></div>
+        <div class="card">
+          <div class="row-between"><div><b>音频输出设备</b><div class="hint">从 squeezelite 扫描系统可用输出</div></div>
+            <button class="btn" id="devScan">重新扫描</button></div>
+          <div class="device-list" id="deviceList"><div class="empty-mini">点击「重新扫描」检测设备</div></div>
+        </div>
+        <div class="card" id="syncCard">
+          <div class="row-between"><div><b>多端同播</b><div class="hint">将多台 LMS 播放器组成同步组，一起播放同一首音乐</div></div>
+            <button class="btn" id="syncRefresh">刷新设备</button></div>
+          <div class="sync-layout">
+            <div class="sync-list" id="syncList"><div class="empty-mini">加载播放器中…</div></div>
+            <div class="sync-side">
+              <div class="sync-master-box"><span class="overline">当前主控</span>
+                <div class="sync-master-name" id="syncMasterName">—</div></div>
+              <div class="sync-actions">
+                <button class="btn primary" id="syncApply">开始同播</button>
+                <button class="btn" id="syncStop">取消同播</button>
+              </div>
+              <p class="hint sync-tip">勾选设备并点选一台作为主控，其余作为从端跟随播放。</p>
+            </div>
+          </div>
+          <div class="sync-result" id="syncResult"></div>
+        </div>
+        <div class="card">
+          <div class="engine-status">
+            <div class="engine-dot" id="engineDot"></div>
+            <div><b id="engineState">引擎未运行</b><div class="hint" id="engineVer">未找到 squeezelite 可执行文件</div></div>
+            <span class="spacer"></span>
+            <button class="btn primary" id="engineToggle">启动引擎</button>
+          </div>
+          <div class="cmd-preview"><span class="overline">启动命令</span><code id="engineCmd">—</code></div>
+          <label class="switch-row"><span>开机自动启动</span><input type="checkbox" id="autoStart"><i></i></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 参数配置 ============ -->
+    <section class="page" id="page-params">
+      <div class="settings-wrap">
+        <div class="settings-head"><h2>参数配置</h2><p class="muted">squeezelite 启动参数，修改后实时预览命令</p></div>
+        <div class="card">
+          <div class="param-toolbar"><div class="param-cats" id="paramCats"></div>
+            <span class="spacer"></span><button class="btn primary" id="paramSave">保存参数</button></div>
+          <div class="param-list" id="paramList"><div class="empty-mini">加载参数中…</div></div>
+        </div>
+        <div class="card">
+          <span class="overline">命令预览</span>
+          <code class="cmd-box" id="paramPreview">—</code>
+          <div class="param-problems" id="paramProblems"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 升级与更新 ============ -->
+    <section class="page" id="page-update">
+      <div class="settings-wrap">
+        <div class="settings-head"><h2>升级与更新</h2><p class="muted">检查 squeezelite 与 LMS 新版本</p></div>
+        <div class="card version-card">
+          <div class="ver-item"><span>当前 squeezelite</span><b id="verLocal">—</b></div>
+          <div class="ver-item"><span>最新 squeezelite</span><b id="verLatest">—</b></div>
+          <div class="ver-item"><span>架构</span><b id="verArch">—</b></div>
+          <span class="spacer"></span><button class="btn primary" id="checkUpdates">检查更新</button>
+        </div>
+        <div class="card">
+          <div class="row-between"><div><b>更新日志</b></div><button class="btn" id="logRefresh">刷新</button></div>
+          <div class="changelog" id="changeLog"><div class="empty-mini">点击「检查更新」加载</div></div>
+        </div>
+        <div class="card">
+          <label class="switch-row"><span>启动时自动检查更新</span><input type="checkbox" id="autoUpgrade"><i></i></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 帮助 ============ -->
+    <section class="page" id="page-help">
+      <div class="settings-wrap">
+        <div class="settings-head"><h2>帮助</h2></div>
+        <div class="card about-card">
+          <span class="about-logo">SONORA</span>
+          <div class="about-sub">颂诺 · 高保真播放器</div>
+          <p class="muted" id="helpMeta"></p>
+          <p class="hint">pywebview 渲染层 · 原创设计 · 详见项目 BRAND.md</p>
+        </div>
+        <div class="card">
+          <b>快捷键</b>
+          <div class="shortcut"><span>播放 / 暂停</span><kbd>空格</kbd></div>
+          <div class="shortcut"><span>退出专注 / 播放器</span><kbd>Esc</kbd></div>
+          <div class="shortcut"><span>返回主页</span><kbd>点击左上角 logo</kbd></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ mini 播放器（底部常驻）============ -->
+  <div class="mini-player" id="miniPlayer" hidden>
+    <div class="mini-cover" id="miniCover"><span class="ph">♪</span></div>
+    <div class="mini-info">
+      <div class="mini-title" id="miniTitle">—</div>
+      <div class="mini-artist" id="miniArtist"></div>
+    </div>
+    <div class="mini-progress"><i id="miniFill"></i></div>
+    <div class="mini-time" id="miniTime">0:00 / 0:00</div>
+    <div class="mini-ctrls">
+      <button class="mini-ctrl" id="miniPrev" title="上一首">‹‹</button>
+      <button class="mini-ctrl play" id="miniPlay" title="播放/暂停">▶</button>
+      <button class="mini-ctrl" id="miniNext" title="下一首">››</button>
+    </div>
+    <div class="mode-ctrls" id="modeCtrls">
+      <button data-mode="seq" class="on" title="顺序播放">⇢</button>
+      <button data-mode="loop" title="列表循环">⟳</button>
+      <button data-mode="one" title="单曲循环">⟳<small>1</small></button>
+      <button data-mode="shuffle" title="随机播放">⤨</button>
+    </div>
+    <div class="vol-ctrl"><span>🔊</span><input type="range" id="volSlider" min="0" max="100" value="60" title="音量"></div>
+  </div>
+
+  <!-- ============ 常规播放器（点击封面进入）============ -->
+  <div class="player-screen" id="playerScreen" hidden>
+    <div class="player-bg" id="playerBg"></div>
+    <div class="player-top">
+      <button class="icon-btn" id="collapsePlayer" title="收起">⌄</button>
+      <span class="spacer"></span>
+      <button class="icon-btn focus-btn" id="focusBtn" title="专注模式">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm14 0h2v6h-6v-2h4v-4Z"/></svg>
+        <span>专注</span>
+      </button>
+    </div>
+    <div class="player-content">
+      <div class="player-left">
+        <div class="player-cover" id="playerCover"><span class="ph">♪</span></div>
+        <div class="led" id="ledPanel">
+          <div class="led-screen">
+            <div class="led-row"><span>FORMAT</span><b id="ledFmt">—</b></div>
+            <div class="led-row"><span>RATE</span><b id="ledRate">—</b></div>
+            <div class="led-row"><span>BITS</span><b id="ledBits">—</b></div>
+            <div class="led-row"><span>BITRATE</span><b id="ledBitrate">—</b></div>
+            <div class="led-status" id="ledStatus">NO SIGNAL</div>
+          </div>
+        </div>
+      </div>
+      <div class="player-right">
+        <div class="player-meta">
+          <div class="title-row"><div class="player-title" id="playerTitle">—</div><button class="fav-btn" id="pFav" title="收藏/取消收藏">♡</button></div>
+          <div class="player-artist" id="playerArtist"></div>
+          <div class="player-album" id="playerAlbum"></div>
+        </div>
+        <div class="player-progress">
+          <div class="pbar"><i id="playerFill"></i></div>
+          <div class="ptimes"><span id="playerCur">0:00</span><span id="playerDur">0:00</span></div>
+        </div>
+        <div class="player-transport">
+          <button id="pPrev">‹‹</button>
+          <button id="pPlay" class="primary">▶</button>
+          <button id="pNext">››</button>
+        </div>
+        <div class="player-subctrls">
+          <div class="mode-ctrls" id="pModeCtrls">
+            <button data-mode="seq" class="on" title="顺序播放">⇢</button>
+            <button data-mode="loop" title="列表循环">⟳</button>
+            <button data-mode="one" title="单曲循环">⟳<small>1</small></button>
+            <button data-mode="shuffle" title="随机播放">⤨</button>
+          </div>
+          <label class="p-vol">🔊 <input type="range" id="pVolSlider" min="0" max="100" value="60" title="音量"></label>
+        </div>
+        <div class="panel-toggles" id="panelToggles">
+          <button data-panel="playlist" class="on">▤ 播放列表</button>
+          <button data-panel="lyrics" class="on">≡ 歌词</button>
+          <button data-panel="albumBio">◫ 专辑简介</button>
+          <button data-panel="artistBio">◙ 歌手简介</button>
+        </div>
+        <div class="player-panels" id="playerPanels">
+          <div class="ppanel" data-panel="playlist"><div class="ppanel-head">播放列表 <span class="ppanel-x" data-close="playlist">×</span></div><div class="pl-toolbar"><select id="plSelect" title="选择播放列表"><option value="">当前队列</option></select><button id="plNew" title="新建播放列表">＋</button><button id="plDel" title="删除所选播放列表">🗑</button><button id="plRefresh" title="刷新">↻</button></div><div class="ppanel-body" id="playlistBox">暂无播放列表</div><div class="ppanel-resize" title="拖动调整高度 · 双击复位"></div></div>
+          <div class="ppanel" data-panel="lyrics"><div class="ppanel-head">歌词 <span class="ppanel-x" data-close="lyrics">×</span></div><div class="ppanel-body" id="lyricsBox">暂无歌词</div><div class="ppanel-resize" title="拖动调整高度 · 双击复位"></div></div>
+          <div class="ppanel" data-panel="albumBio" hidden><div class="ppanel-head">专辑简介 <span class="ppanel-x" data-close="albumBio">×</span></div><div class="ppanel-body" id="albumBioBox">暂无专辑简介</div><div class="ppanel-resize" title="拖动调整高度 · 双击复位"></div></div>
+          <div class="ppanel" data-panel="artistBio" hidden><div class="ppanel-head">歌手简介 <span class="ppanel-x" data-close="artistBio">×</span></div><div class="ppanel-body" id="artistBioBox">暂无歌手简介</div><div class="ppanel-resize" title="拖动调整高度 · 双击复位"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 专注大屏模式 ============ -->
+  <div class="focus-screen" id="focusScreen" hidden>
+    <div class="focus-bg" id="focusBg"></div>
+    <div class="focus-top">
+      <span class="focus-player" id="focusPlayer">播放器</span>
+      <span class="spacer"></span>
+      <div class="mode-ctrls focus-mode" id="fModeCtrls">
+        <button data-mode="seq" class="on" title="顺序播放">⇢</button>
+        <button data-mode="loop" title="列表循环">⟳</button>
+        <button data-mode="one" title="单曲循环">⟳<small>1</small></button>
+        <button data-mode="shuffle" title="随机播放">⤨</button>
+      </div>
+      <div class="focus-toggles" id="focusToggles">
+        <button data-fpanel="playlist" title="播放列表">▤</button>
+        <button data-fpanel="info" title="曲目信息">ⓘ</button>
+        <button data-fpanel="artistBio" title="歌手简介">◙</button>
+        <button data-fpanel="lyricsOn" class="on" title="显示/隐藏歌词">≡</button>
+      </div>
+      <button class="icon-btn focus-exit" id="focusExit" title="退出专注模式">⤡</button>
+    </div>
+    <div class="focus-content">
+      <div class="focus-cover-col">
+        <div class="focus-cover" id="focusCover"><span class="ph">♪</span></div>
+      </div>
+      <div class="focus-mid">
+        <div class="focus-meta">
+          <div class="focus-title" id="focusTitle">—</div>
+          <div class="focus-artist" id="focusArtist"></div>
+          <div class="focus-album" id="focusAlbum"></div>
+        </div>
+        <div class="focus-lyrics" id="focusLyrics"></div>
+      </div>
+      <!-- 弹出侧栏 -->
+      <aside class="focus-aside" id="focusAside" hidden>
+        <div class="fa-head"><span id="faTitle">播放列表</span><button id="faClose">×</button></div>
+        <div class="fa-body" id="faBody"></div>
+      </aside>
+    </div>
+    <div class="focus-bottom">
+      <div class="focus-pbar"><i id="focusFill"></i></div>
+      <div class="focus-ctrls">
+        <button id="fPrev">‹‹</button>
+        <button id="fPlay" class="play">▶</button>
+        <button id="fNext">››</button>
+      </div>
+      <div class="focus-times"><span id="focusCur">0:00</span><span id="focusDur">0:00</span></div>
+    </div>
+  </div>
+
+  <!-- ===== 右键上下文菜单 ===== -->
+  <div class="ctx-menu" id="ctxMenu" hidden>
+    <button data-act="play"><span class="cx-ico">▶</span>立即播放</button>
+    <button data-act="next"><span class="cx-ico">⤼</span>下一首播放</button>
+    <button data-act="queue"><span class="cx-ico">＋</span>加入当前队列</button>
+    <button data-act="pl"><span class="cx-ico">▤</span>加入播放列表…</button>
+    <button data-act="fav"><span class="cx-ico">♥</span><span class="fav-label">收藏</span></button>
+    <div class="cx-sep"></div>
+    <button data-act="drill"><span class="cx-ico">⌄</span>查看曲目</button>
+    <button data-act="info"><span class="cx-ico">ⓘ</span>显示信息</button>
+  </div>
+
+  <!-- ===== 信息弹窗 ===== -->
+  <div class="modal-mask" id="infoModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><b id="infoTitle">曲目信息</b><button id="infoClose">×</button></div>
+      <div class="modal-body" id="infoBody"></div>
+    </div>
+  </div>
+
+  <!-- ===== 加入播放列表弹窗 ===== -->
+  <div class="modal-mask" id="plModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><b>加入播放列表</b><button id="plModalClose">×</button></div>
+      <div class="modal-body" id="plModalBody"></div>
+    </div>
+  </div>
+
+  <footer class="foot" id="foot"><span id="status">就绪</span><span class="spacer" style="flex:1"></span><span id="footVer"></span></footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

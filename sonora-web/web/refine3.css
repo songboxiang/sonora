@@ -1,0 +1,59 @@
+
+/* ============================================================
+   视觉精修 v0.5 · 面板可缩放 / 收藏心形 / 音乐库播放列表入口
+   ============================================================ */
+
+/* ---------- 面板：内容自适应 + 拖拽缩放 ---------- */
+/* 默认上限 320px（比旧 220 更大）；内容不足时按内容高度，超出时出现滚动条 */
+.ppanel { --panel-h: 320px; display:flex; flex-direction:column; }
+.ppanel-body { min-height:180px; max-height:var(--panel-h); overflow:auto; flex:0 1 auto; }
+.ppanel-resize {
+  height:12px; flex:none; cursor:ns-resize; position:relative;
+  border-top:1px solid rgba(255,255,255,.06);
+  background:linear-gradient(180deg,transparent,rgba(124,199,166,.05));
+  transition:background .15s;
+}
+.ppanel-resize::after {
+  content:""; position:absolute; left:50%; top:4px; transform:translateX(-50%);
+  width:34px; height:3px; border-radius:3px; background:rgba(255,255,255,.18);
+}
+.ppanel-resize:hover { background:rgba(124,199,166,.14); }
+.ppanel-resize:hover::after { background:var(--primary); }
+.ppanel-resizing, .ppanel-resizing * { cursor:ns-resize !important; user-select:none !important; }
+/* 歌词面板默认更高一些 */
+.ppanel[data-panel="lyrics"] { --panel-h: 360px; }
+.ppanel[data-panel="lyrics"] .ppanel-body { min-height:220px; }
+
+/* ---------- 收藏心形按钮 ---------- */
+.title-row { display:flex; align-items:flex-start; gap:12px; }
+.title-row .player-title { flex:1; }
+.fav-btn {
+  border:0; background:transparent; color:rgba(255,255,255,.4);
+  font-size:26px; line-height:1; cursor:pointer; flex:none;
+  padding:0 4px; transition:.18s cubic-bezier(.2,.8,.2,1);
+  text-shadow:0 2px 6px rgba(0,0,0,.4);
+}
+.fav-btn:hover { color:#ffd479; transform:scale(1.12); }
+.fav-btn.on { color:#ff6b81; text-shadow:0 0 14px rgba(255,107,129,.7); }
+
+/* 音乐库条目上的小心形 */
+.lib-item .fav-mini {
+  position:absolute; top:8px; right:8px; z-index:3;
+  width:26px; height:26px; border:0; border-radius:50%;
+  background:rgba(0,0,0,.5); backdrop-filter:blur(6px);
+  color:rgba(255,255,255,.6); font-size:15px; line-height:26px; text-align:center;
+  opacity:0; transition:.18s; cursor:pointer;
+}
+.lib-item { position:relative; }
+.lib-item:hover .fav-mini, .lib-item .fav-mini.on { opacity:1; }
+.lib-item .fav-mini.on { color:#ff6b81; background:rgba(0,0,0,.6); text-shadow:0 0 8px rgba(255,107,129,.7); }
+.lib-item.list .fav-mini { top:50%; transform:translateY(-50%); }
+
+/* 播放列表行内的心形 */
+.pl-fav { border:0; background:transparent; color:rgba(255,255,255,.35);
+  font-size:14px; cursor:pointer; padding:0 3px; transition:.15s; flex:none; }
+.pl-fav:hover { color:#ffd479; }
+.pl-fav.on { color:#ff6b81; text-shadow:0 0 8px rgba(255,107,129,.6); }
+
+/* 右键收藏项点亮态 */
+.ctx-menu button[data-act="fav"] .cx-ico { color:#ff6b81; }

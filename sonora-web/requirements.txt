@@ -1,0 +1,4 @@
+# Sonora 颂诺 · Web 版运行依赖
+# pywebview 6.x 使用系统 WKWebView（macOS 自带），无需打包浏览器内核
+pywebview>=6.0,<7
+Pillow>=10.0

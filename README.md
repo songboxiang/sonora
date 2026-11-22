@@ -1,5 +1,10 @@
 # Squeezelite GUI（macOS）
 
+
+> 🆕 **v2.0.0 大版本（Sonora 颂诺 · Web 版）已发布**：全新 pywebview 渲染层，
+> 见 [`sonora-web/`](sonora-web/)（[运行说明](sonora-web/README.md) /
+> [更新日志](sonora-web/CHANGELOG.md)）。下方为经典 Tk 版 v1.x 说明。
+
 一个零第三方依赖的 macOS 图形化控制台，用于配置、启动与升级
 [Squeezelite](https://github.com/ralph-irving/squeezelite) 播放器，
 并查询 Lyrion Media Server (LMS) 服务端版本更新。

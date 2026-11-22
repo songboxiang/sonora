@@ -3,6 +3,18 @@
 本项目遵循语义化版本：发布时同步更新 `squeezelite_gui.py` 中的 `VERSION`
 常量，并打附注标签 `vX.Y.Z`。
 
+## v2.0.0 (2026-11-22) — 大版本升级：Web 渲染层（Sonora 颂诺）
+
+- 新增 `sonora-web/` —— pywebview 渲染层完整重构版本，作为本产品的
+  **v2.0.0 大版本**与后续主线。Tk 版 v1.x 文件全部保留在仓库根目录，
+  不受影响、可随时回退。
+- Web 版：HTML/CSS 渲染（系统 WKWebView），毛玻璃 / 圆角 / 阴影 / 渐变、
+  大封面与专注模式；音乐库四类下钻、播放列表 + 收藏体系、播放模式与音量、
+  45+ Bridge API 与真实 LMS 双向互通。
+- 交付：macOS 一键启动 `sonora-web/run_mac.command`（自动建 venv + 装依赖
+  + 启动窗口）；离线预览 `build_preview.py`。
+- 详细变更见 `sonora-web/CHANGELOG.md`；运行说明见 `sonora-web/README.md`。
+
 ## v1.6.0 (2026-11-22) — 设计交付包落地：设计令牌 / 字号层级 / 组件样式全量替换
 
 - **设计令牌灌入**：按 `design-tokens.json` v1.1 把浅 / 深两套共 40 个令牌
