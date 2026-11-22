@@ -1,0 +1,100 @@
+{
+  "$meta": {
+    "project": "Squeezelite GUI",
+    "version": "1.1.0",
+    "baseline": "UI_DESIGN_BRIEF.md v1.5.1",
+    "platform": "Python tkinter/ttk (macOS Tk 9 / Linux Tk 8.6), single file",
+    "note": "所有颜色均为 #RRGGBB 纯色（Tk 无 RGBA/渐变/阴影/圆角容器）。contrast 字段为该色与其所在背景的 WCAG 2.1 对比度，AA 正文需 >=4.5，大字/图形需 >=3.0。",
+    "brandNote": "Lyrion Material 原色 #589E81/#6CAC92 保留为 brand.decorative（仅用于进度条填充、图标点缀、装饰条等非文字场景）；可交互主色改用加深后的 primary，以满足文字/按钮的 WCAG AA。",
+    "v1.1Note": "风格强化版：向 LMS Material 皮肤 + Audirvana 靠拢。① 英文/数字字体统一 Roboto（Material 官方字体），中文沿用 Noto Sans SC；② 曲名字号 upgrade（播放页 42、专注页 56）强化 Audirvana 大字层级；③ 进度条 6→8px；④ 卡片去边框改 surface 浅底；⑤ 深色屏封面占位改深色底。Tk 落地时 Roboto 不可内置，回退系统 sans（macOS -apple-system / Linux Noto Sans CJK SC），版式按本稿字号层级即可。"
+  },
+
+  "colors": {
+    "light": {
+      "background":        { "value": "#FAFAFA", "contrast": null, "role": "窗口/内容区底色 (Lyrion 浅底)", "token": "C['bg']" },
+      "topbar":            { "value": "#FFFFFF", "contrast": null, "role": "顶栏底色", "token": "C['topbar']" },
+      "card":              { "value": "#FFFFFF", "contrast": null, "role": "卡片底色", "token": "C['surface']" },
+      "cardBorder":        { "value": "#E0E7E3", "contrast": 1.24, "role": "卡片/控件细边框", "token": "C['border']" },
+      "textPrimary":       { "value": "#1B2A26", "contrast": 14.31, "role": "主文字 (on background)", "token": "C['fg']" },
+      "textSecondary":     { "value": "#53655E", "contrast": 5.93, "role": "次文字/元数据 (on background)", "token": "C['muted']" },
+      "primary":           { "value": "#2F6B52", "contrast": 6.01, "role": "可交互主色: 主按钮底、选中文字、链接", "token": "C['accent']" },
+      "onPrimary":         { "value": "#FFFFFF", "contrast": 6.28, "role": "主色之上文字 (on primary #2F6B52)", "token": "C['on_accent']" },
+      "brandDecorative":   { "value": "#589E81", "contrast": 3.04, "role": "Lyrion 品牌装饰色: 进度条填充/图标点缀, 不用于正文", "token": "C['brand']" },
+      "success":           { "value": "#3E7D62", "contrast": 4.66, "role": "成功/Ok 状态文字", "token": "C['ok']" },
+      "warning":           { "value": "#9A6100", "contrast": 4.93, "role": "警告/Warn 状态文字", "token": "C['warn']" },
+      "error":             { "value": "#B5352B", "contrast": 5.73, "role": "错误/危险 状态文字", "token": "C['error']" },
+      "selected":          { "value": "#E2F0EA", "contrast": null, "role": "选中/激活背景", "token": "C['selected']" },
+      "hover":             { "value": "#EEF5F1", "contrast": null, "role": "悬停背景", "token": "C['hover']" },
+      "disabled":          { "value": "#8E9B95", "contrast": 2.77, "role": "禁用态文字/图形 (WCAG 豁免, 仅装饰)", "token": "C['disabled']" },
+      "divider":           { "value": "#E4EAE7", "contrast": 1.18, "role": "分隔线", "token": "C['divider']" },
+      "progressTrack":     { "value": "#DCE5E0", "contrast": null, "role": "进度条底槽", "token": "C['prog_bg']" },
+      "progressFill":      { "value": "#589E81", "contrast": 3.04, "role": "进度条填充 (troughColor→进度, 图形对比>=3.0 达标)", "token": "C['prog_fg']" }
+    },
+    "dark": {
+      "background":        { "value": "#081F22", "contrast": null, "role": "窗口/内容区底色 (Lyrion 深底)", "token": "C['bg']" },
+      "topbar":            { "value": "#0D292D", "contrast": null, "role": "顶栏底色", "token": "C['topbar']" },
+      "card":              { "value": "#0D292D", "contrast": null, "role": "卡片底色 (Lyrion 弹层色)", "token": "C['surface']" },
+      "cardBorder":        { "value": "#22444A", "contrast": 1.44, "role": "卡片/控件细边框", "token": "C['border']" },
+      "textPrimary":       { "value": "#EAF3EF", "contrast": 15.10, "role": "主文字 (on background)", "token": "C['fg']" },
+      "textSecondary":     { "value": "#A6BDB6", "contrast": 8.60, "role": "次文字/元数据 (on background)", "token": "C['muted']" },
+      "primary":           { "value": "#7CC7A6", "contrast": 8.60, "role": "可交互主色: 主按钮底、选中文字、链接", "token": "C['accent']" },
+      "onPrimary":         { "value": "#081F22", "contrast": 8.60, "role": "主色之上文字 (on primary #7CC7A6)", "token": "C['on_accent']" },
+      "brandDecorative":   { "value": "#6CAC92", "contrast": 6.47, "role": "Lyrion 品牌装饰色: 进度条填充/图标点缀", "token": "C['brand']" },
+      "success":           { "value": "#7CC7A6", "contrast": 8.60, "role": "成功/Ok 状态文字", "token": "C['ok']" },
+      "warning":           { "value": "#E9B15C", "contrast": 7.95, "role": "警告/Warn 状态文字", "token": "C['warn']" },
+      "error":             { "value": "#F0857A", "contrast": 6.78, "role": "错误/危险 状态文字", "token": "C['error']" },
+      "selected":          { "value": "#17453E", "contrast": null, "role": "选中/激活背景", "token": "C['selected']" },
+      "hover":             { "value": "#153A3C", "contrast": null, "role": "悬停背景", "token": "C['hover']" },
+      "disabled":          { "value": "#6E8984", "contrast": 4.53, "role": "禁用态文字/图形", "token": "C['disabled']" },
+      "divider":           { "value": "#22444A", "contrast": 1.44, "role": "分隔线", "token": "C['divider']" },
+      "progressTrack":     { "value": "#22444A", "contrast": null, "role": "进度条底槽", "token": "C['prog_bg']" },
+      "progressFill":      { "value": "#6CAC92", "contrast": 6.47, "role": "进度条填充", "token": "C['prog_fg']" }
+    }
+  },
+
+  "typography": {
+    "fontFamily": {
+      "latin": "Roboto (Material Design 官方字体; Tk 落地回退系统 sans)",
+      "cjk": "Noto Sans SC (macOS 回退 PingFang SC / Linux 回退 Noto Sans CJK SC)",
+      "note": "Tk 只能用系统字体, 不得内置字体文件; 中文行高需按英文 1.2x 预留; 数字/英文标签(时间/元数据/overline)优先 Roboto, 中文及中英混排用 Noto Sans SC"
+    },
+    "scale": [
+      { "name": "hero",     "px": 42, "weight": "bold",   "lineHeightPx": 50, "usage": "正在播放曲名 (Audirvana 大字层级)", "ttkStyle": "Hero.TLabel" },
+      { "name": "heroFocus","px": 56, "weight": "bold",   "lineHeightPx": 68, "usage": "专注大屏曲名 (Audirvana 沉浸大字)", "ttkStyle": "HeroFocus.TLabel" },
+      { "name": "title",    "px": 24, "weight": "bold",   "lineHeightPx": 30, "usage": "页面标题/专辑名", "ttkStyle": "Title.TLabel" },
+      { "name": "subtitle", "px": 17, "weight": "normal", "lineHeightPx": 23, "usage": "副标题/歌手名", "ttkStyle": "Subtitle.TLabel" },
+      { "name": "body",     "px": 14, "weight": "normal", "lineHeightPx": 20, "usage": "正文/列表项/参数标签", "ttkStyle": "TLabel" },
+      { "name": "caption",  "px": 12, "weight": "normal", "lineHeightPx": 17, "usage": "元数据/歌词/帮助说明", "ttkStyle": "Caption.TLabel" },
+      { "name": "overline", "px": 10, "weight": "bold",   "lineHeightPx": 14, "usage": "分组标题/角标/徽章 (全大写英文)", "ttkStyle": "Overline.TLabel" }
+    ]
+  },
+
+  "spacing": {
+    "xs": 4, "sm": 8, "md": 12, "lg": 20, "xl": 32,
+    "radius": 0,
+    "borderWidth": 1,
+    "controlMinHeight": 32,
+    "listRowHeight": 56,
+    "toolbarRowHeight": 36,
+    "progressBarHeight": 8
+  },
+
+  "sizes": {
+    "minWindow": { "width": 1120, "height": 760 },
+    "cover": {
+      "libraryThumb": 44,
+      "nowPlayingMain": 272,
+      "libraryDetail": 280,
+      "focusHero": 420
+    },
+    "pngIconSizes": [16, 24, 32],
+    "icnsSizes": [16, 32, 128, 256, 512]
+  },
+
+  "motion": {
+    "focusExitBtnShowDelayMs": 120,
+    "focusIdleHideMs": 3000,
+    "colorTransitionMs": 150,
+    "note": "Tk 无 CSS 过渡, 颜色切换通过 _apply_theme() 即时重绘; 延迟仅用 after(ms) 实现显示/隐藏"
+  }
+}

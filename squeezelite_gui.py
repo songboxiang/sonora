@@ -51,7 +51,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -71,27 +71,46 @@ IS_MAC = (sys.platform == "darwin")
 # 本项目仅借用其配色与 Material 视觉语言；GUI 代码、图标均为原创。
 # ---------------------------------------------------------------------------
 THEMES = {
+    # v1.6.0: design-tokens.json v1.1 精确落地。
+    # primary = 可交互主色 (WCAG AA: 浅 6.01:1 / 深 8.60:1)
+    # brand / prog_fg = Lyrion 原色，仅用于进度条与装饰，不用于正文。
     "light": {
-        "primary": "#589e81", "primary_dark": "#3f7a61", "on_primary": "#ffffff",
-        "app_bar": "#589e81", "on_app_bar": "#ffffff", "accent": "#6cac92",
-        "bg": "#fafafa", "surface": "#ffffff", "surface2": "#f1f5f3",
-        "border": "#dfe6e3", "divider": "#e8eeeb",
-        "text": "#1f2926", "text2": "#5f6b67", "text3": "#8a9792",
-        "link": "#0a5ca8", "ok": "#2e7d5b", "warn": "#9a6410", "err": "#c0392b",
-        "sel": "#dcefe7", "sel_text": "#12352a", "row_alt": "#f4f8f6",
-        "scroll": "#c2cdc9", "scroll_active": "#589e81",
-        "terminal_bg": "#12211f", "terminal_fg": "#dceae5", "code_bg": "#f1f5f3",
+        "bg": "#FAFAFA", "topbar": "#FFFFFF", "surface": "#FFFFFF",
+        "surface2": "#F5F8F6", "card": "#FFFFFF", "card_border": "#E0E7E3",
+        "border": "#E0E7E3", "divider": "#E4EAE7",
+        "text": "#1B2A26", "text2": "#53655E", "text3": "#8E9B95",
+        "muted": "#53655E", "disabled": "#8E9B95",
+        "primary": "#2F6B52", "primary_dark": "#2A5F49",
+        "on_primary": "#FFFFFF", "on_accent": "#FFFFFF",
+        "accent": "#2F6B52", "brand": "#589E81", "brand_decorative": "#589E81",
+        "app_bar": "#FFFFFF", "on_app_bar": "#1B2A26",
+        "ok": "#3E7D62", "warn": "#9A6100", "err": "#B5352B", "error": "#B5352B",
+        "sel": "#E2F0EA", "sel_text": "#2F6B52",
+        "hover": "#EEF5F1", "selected": "#E2F0EA",
+        "link": "#2F6B52", "row_alt": "#F5F8F6",
+        "prog_bg": "#DCE5E0", "prog_fg": "#589E81",
+        "cover_pad": "#E9EEF0",
+        "scroll": "#E0E7E3", "scroll_active": "#2F6B52",
+        "terminal_bg": "#12211f", "terminal_fg": "#dceae5", "code_bg": "#F1F5F3",
     },
     "dark": {
-        "primary": "#589e81", "primary_dark": "#6cac92", "on_primary": "#ffffff",
-        "app_bar": "#0d292d", "on_app_bar": "#e3fdc4", "accent": "#e3fdc4",
-        "bg": "#081f22", "surface": "#0d292d", "surface2": "#123338",
-        "border": "#20454a", "divider": "#1a3b3f",
-        "text": "#e6f0ec", "text2": "#9fb4ae", "text3": "#78918a",
-        "link": "#8fd0b4", "ok": "#8fd6ae", "warn": "#e0be6a", "err": "#ef8f80",
-        "sel": "#1d4d47", "sel_text": "#e3fdc4", "row_alt": "#103035",
-        "scroll": "#2b5054", "scroll_active": "#6cac92",
-        "terminal_bg": "#06171a", "terminal_fg": "#d5e8e1", "code_bg": "#0d292d",
+        "bg": "#081F22", "topbar": "#0D292D", "surface": "#0D292D",
+        "surface2": "#0F2C2F", "card": "#0D292D", "card_border": "#22444A",
+        "border": "#22444A", "divider": "#22444A",
+        "text": "#EAF3EF", "text2": "#A6BDB6", "text3": "#6E8984",
+        "muted": "#A6BDB6", "disabled": "#6E8984",
+        "primary": "#7CC7A6", "primary_dark": "#6DB99A",
+        "on_primary": "#081F22", "on_accent": "#081F22",
+        "accent": "#7CC7A6", "brand": "#6CAC92", "brand_decorative": "#6CAC92",
+        "app_bar": "#0D292D", "on_app_bar": "#EAF3EF",
+        "ok": "#7CC7A6", "warn": "#E9B15C", "err": "#F0857A", "error": "#F0857A",
+        "sel": "#17453E", "sel_text": "#EAF3EF",
+        "hover": "#153A3C", "selected": "#17453E",
+        "link": "#7CC7A6", "row_alt": "#0F2C2F",
+        "prog_bg": "#22444A", "prog_fg": "#6CAC92",
+        "cover_pad": "#12332F",
+        "scroll": "#22444A", "scroll_active": "#7CC7A6",
+        "terminal_bg": "#06171a", "terminal_fg": "#d5e8e1", "code_bg": "#0D292D",
     },
 }
 
@@ -1460,7 +1479,7 @@ class App(tk.Tk):
         self._terminal_texts = []
         self.title("%s  v%s" % (APP_NAME, VERSION))
         self.geometry("1200x820")
-        self.minsize(1020, 680)
+        self.minsize(1120, 760)
         self._init_style()
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1559,7 +1578,7 @@ class App(tk.Tk):
                 fg = C[fgk] if fgk in C else (C["on_app_bar"] if bar else C["text"])
                 w.configure(background=bg, foreground=fg,
                             activebackground=C["primary_dark"],
-                            activeforeground=C["on_app_bar"],
+                            activeforeground=C["on_primary"],
                             relief="flat", bd=0)
             elif cls == "Text":
                 term = w in getattr(self, "_terminal_texts", ())
@@ -1651,12 +1670,18 @@ class App(tk.Tk):
         except Exception:
             pass
         self.fam = fam
-        self.ui_font = (fam, 11)
-        self.small_font = (fam, 9)
+        self.ui_font = (fam, 12)          # v1.6.0: 正文 11 -> 12
+        self.small_font = (fam, 10)       # v1.6.0: 小字 9 -> 10（设计 caption 12 的子级）
         self.bold_font = (fam, 11, "bold")
         self.head_font = (fam, 10, "bold")
-        self.title_font = (fam, 15, "bold")
-        self.display_font = (fam, 20, "bold")
+        self.title_font = (fam, 17, "bold")         # v1.6.0: 小节标题 15 -> 17（设计 subtitle）
+        self.display_font = (fam, 42, "bold")       # hero 曲名 (design 42)
+        self.hero_focus_font = (fam, 56, "bold")    # heroFocus (design 56)
+        self.page_title_font = (fam, 24, "bold")    # 页面标题 / 专辑名
+        self.subtitle_font = (fam, 18)              # 副标题 / 歌手
+        self.caption_font = (fam, 13)               # 元数据 / 歌词
+        self.overline_font = (fam, 11, "bold")      # 分组标题 / 角标
+        self.body_font = (fam, 14)                  # 正文备用 (全局仍 10pt)
         self.mono_font = ("Menlo", 10) if IS_MAC else ("DejaVu Sans Mono", 10)
 
         style.configure(".", background=C["bg"], foreground=C["text"],
@@ -1678,7 +1703,7 @@ class App(tk.Tk):
                         font=(fam, 10), padding=(14, 7), relief="flat",
                         borderwidth=1)
         style.map("TButton",
-                  background=[("pressed", C["sel"]), ("active", C["surface2"]),
+                  background=[("pressed", C["sel"]), ("active", C["hover"]),
                               ("disabled", C["bg"])],
                   foreground=[("disabled", C["text3"])],
                   bordercolor=[("focus", C["primary"])])
@@ -1688,7 +1713,7 @@ class App(tk.Tk):
                         font=(fam, 10), padding=(7, 5), relief="flat",
                         borderwidth=1)
         style.map("Tool.TButton",
-                  background=[("pressed", C["sel"]), ("active", C["surface2"])],
+                  background=[("pressed", C["sel"]), ("active", C["hover"])],
                   foreground=[("disabled", C["text3"])],
                   bordercolor=[("focus", C["primary"])])
         style.configure("Accent.TButton", background=C["primary"],
@@ -1730,13 +1755,13 @@ class App(tk.Tk):
                         font=(fam, 10, "bold"), borderwidth=0, relief="flat")
         style.map("TNotebook.Tab",
                   background=[("selected", C["surface"]),
-                              ("active", C["surface2"])],
+                              ("active", C["hover"])],
                   foreground=[("selected", C["primary"]),
                               ("active", C["text"])])
         # 音乐库专用列表：更大的行高容纳封面缩略图，避免文字与封面挤在一起
         style.configure("Lib.Treeview", background=C["surface"],
                         fieldbackground=C["surface"], foreground=C["text"],
-                        font=(fam, 11), rowheight=54,
+                        font=(fam, 11), rowheight=56,
                         bordercolor=C["divider"], relief="flat", borderwidth=0)
         style.map("Lib.Treeview",
                   background=[("selected", C["sel"])],
@@ -1760,10 +1785,10 @@ class App(tk.Tk):
                               ("pressed", C["primary"])],
                   arrowcolor=[("active", C["primary"])])
         style.configure("TSeparator", background=C["divider"])
-        style.configure("TProgressbar", background=C["primary"],
-                        troughcolor=C["surface2"], bordercolor=C["surface2"],
-                        lightcolor=C["primary"], darkcolor=C["primary"],
-                        relief="flat", thickness=6, borderwidth=0)
+        style.configure("TProgressbar", background=C["prog_fg"],
+                        troughcolor=C["prog_bg"], bordercolor=C["prog_bg"],
+                        lightcolor=C["prog_fg"], darkcolor=C["prog_fg"],
+                        relief="flat", thickness=8, borderwidth=0)
         style.configure("TCheckbutton", background=C["bg"],
                         foreground=C["text"], font=(fam, 10),
                         indicatorcolor=C["surface"], bordercolor=C["border"])
@@ -1785,34 +1810,72 @@ class App(tk.Tk):
         style.configure("Card.TFrame", background=C["surface"],
                         bordercolor=C["border"], relief="solid", borderwidth=1)
         # 主题分段：ttk 自绘，macOS Aqua 下也能保证三态都清晰
-        style.configure("ThemeSeg.TLabel", background=C["app_bar"],
-                        foreground=C["on_app_bar"], font=(fam, 10),
-                        padding=(13, 6), anchor="center")
-        style.configure("ThemeSegOn.TLabel", background=C["on_app_bar"],
-                        foreground=C["app_bar"], font=(fam, 10, "bold"),
-                        padding=(13, 6), anchor="center")
+        # 三态分段：未选中项用 muted 保证可读（修复旧版只有选中项可读）
+        style.configure("ThemeSeg.TLabel", background=C["topbar"],
+                        foreground=C["text2"], font=(fam, 10),
+                        padding=(13, 6), anchor="center",
+                        bordercolor=C["border"], relief="solid", borderwidth=1)
+        style.configure("ThemeSegOn.TLabel", background=C["selected"],
+                        foreground=C["primary"], font=(fam, 10, "bold"),
+                        padding=(13, 6), anchor="center",
+                        bordercolor=C["primary"], relief="solid", borderwidth=1)
         style.map("ThemeSeg.TLabel",
-                  background=[("active", C["primary_dark"])],
-                  foreground=[("active", C["on_app_bar"])])
+                  background=[("active", C["hover"])],
+                  foreground=[("active", C["text"])])
         style.configure("Rec.TLabel", background=C["bg"],
                         foreground=C["ok"], font=self.small_font)
         style.configure("AppBar.TLabel", background=C["app_bar"],
                         foreground=C["on_app_bar"])
+        # ---- v1.6.0 设计交付包新增样式 (mapping.md To-Create List) ----
+        style.configure("Top.TFrame", background=C["topbar"])
+        style.configure("PageTitle.TLabel", background=C["bg"],
+                        foreground=C["text"], font=self.page_title_font)
+        style.configure("Subtitle.TLabel", background=C["bg"],
+                        foreground=C["text2"], font=self.subtitle_font)
+        style.configure("Caption.TLabel", background=C["bg"],
+                        foreground=C["text2"], font=self.caption_font)
+        style.configure("Overline.TLabel", background=C["bg"],
+                        foreground=C["text2"], font=self.overline_font)
+        style.configure("HeroFocus.TLabel", background=C["bg"],
+                        foreground=C["text"], font=self.hero_focus_font)
+        style.configure("Error.TLabel", background=C["bg"],
+                        foreground=C["error"], font=(fam, 10, "bold"))
+        style.configure("Badge.TLabel", background=C["primary"],
+                        foreground=C["on_primary"], font=(fam, 10, "bold"),
+                        padding=(6, 2))
+        style.configure("Status.TLabel", background=C["surface"],
+                        foreground=C["text"], font=(fam, 10),
+                        padding=(8, 4))
+        style.configure("Danger.TButton", background=C["surface"],
+                        foreground=C["error"], bordercolor=C["error"],
+                        font=(fam, 10), padding=(10, 5), relief="flat",
+                        borderwidth=1)
+        style.map("Danger.TButton",
+                  background=[("pressed", C["error"]), ("active", C["hover"])],
+                  foreground=[("pressed", C["on_primary"]),
+                              ("disabled", C["disabled"])])
+        style.configure("Item.Treeview", background=C["surface"],
+                        fieldbackground=C["surface"], foreground=C["text"],
+                        font=self.ui_font, rowheight=56,
+                        bordercolor=C["divider"], relief="flat", borderwidth=0)
+        style.map("Item.Treeview",
+                  background=[("selected", C["selected"])],
+                  foreground=[("selected", C["sel_text"])])
         self.configure(background=C["bg"])
 
     # ------------------------------------------------------------ 主框架
     def _build_ui(self):
         C = self.C
-        self.app_bar = tk.Frame(self, background=C["app_bar"], height=64)
+        self.app_bar = tk.Frame(self, background=C["app_bar"], height=48)
         self.app_bar.pack(fill="x")
         self.app_bar.pack_propagate(False)
         self._bar_rule = tk.Frame(self, background=C["border"], height=1)
         self._bar_rule.pack(fill="x")
         self._bar_rule._sq_bg = "border"
-        tk.Label(self.app_bar, text="Squeezelite", background=C["app_bar"],
+        tk.Label(self.app_bar, text="Squeezelite GUI", background=C["app_bar"],
                  foreground=C["on_app_bar"], font=(self.fam, 17, "bold")
                  ).pack(side="left", padx=(20, 8))
-        tk.Label(self.app_bar, text="LMS Material 控制台",
+        tk.Label(self.app_bar, text="高保真播放器  ·  Hi-Res Player",
                  background=C["app_bar"], foreground=C["on_app_bar"],
                  font=(self.fam, 10)).pack(side="left")
         # 主题：Material 分段按钮，自绘以避免 ttk.Combobox 在深色 app bar
@@ -1862,7 +1925,7 @@ class App(tk.Tk):
         self._build_tab_help()
         self._refresh_tree_tags()
 
-        foot = ttk.Frame(self, padding=(14, 8))
+        foot = ttk.Frame(self, style="Top.TFrame", padding=(14, 8))
         foot.pack(fill="x")
         self.status_var = tk.StringVar(value="就绪")
         ttk.Label(foot, textvariable=self.status_var,
@@ -1871,7 +1934,8 @@ class App(tk.Tk):
         self.pbar.pack(side="left", padx=10)
         ttk.Button(foot, text="保存配置", style="Accent.TButton",
                    command=self._save_config).pack(side="right", padx=3)
-        ttk.Button(foot, text="退出", command=self._on_close).pack(side="right", padx=3)
+        ttk.Button(foot, text="退出", style="Danger.TButton",
+                   command=self._on_close).pack(side="right", padx=3)
         ttk.Button(foot, text="重新生成命令", command=self._refresh_preview).pack(side="right", padx=3)
 
     # ------------------------------------------------------------ 日志/队列
@@ -2098,7 +2162,7 @@ class App(tk.Tk):
                                 **self._text_opts(False))
         self.mini_cmd.pack(fill="x")
         self.mini_cmd.configure(state="disabled")
-        self.validate_lbl = ttk.Label(bottom, text="", style="Hint.TLabel")
+        self.validate_lbl = ttk.Label(bottom, text="", style="Status.TLabel")
         self.validate_lbl.pack(anchor="w", pady=(4, 0))
 
     def _make_param_row(self, parent, p):
@@ -2272,9 +2336,9 @@ class App(tk.Tk):
         problems = validate_all(self.values, self.cfg.get("extra", ""))
         if problems:
             messagebox.showwarning("参数校验未通过", "\n\n".join(problems))
-            self.validate_lbl.configure(text="⚠ 发现 %d 处问题" % len(problems), foreground=self.C["err"])
+            self.validate_lbl.configure(text="⚠ 发现 %d 处问题" % len(problems), style="Error.TLabel")
         else:
-            self.validate_lbl.configure(text="✓ 全部参数取值合法", foreground=self.C["ok"])
+            self.validate_lbl.configure(text="✓ 全部参数取值合法", style="Ok.TLabel")
             messagebox.showinfo("校验通过", "全部参数与自定义附加参数取值合法。")
 
     # ------------------------------------------------------------ Tab3 启动控制
@@ -2546,10 +2610,10 @@ class App(tk.Tk):
                 self.cmd_text.insert("1.0", text)
             if hasattr(self, "validate_lbl"):
                 if problems:
-                    self.validate_lbl.configure(text="⚠ " + "；".join(problems[:3]),
+                    self.validate_lbl.configure(text="⚠ " + "；".join(problems[:3]), style="Error.TLabel",
                                                 foreground=self.C["err"])
                 else:
-                    self.validate_lbl.configure(text="✓ 全部参数合法 · 共 %d 个参数项" % len(argv),
+                    self.validate_lbl.configure(text="✓ 全部参数合法 · 共 %d 个参数项" % len(argv), style="Ok.TLabel",
                                                 foreground=self.C["ok"])
         except Exception as e:
             self._log("刷新命令预览失败: %s" % e)
@@ -2954,7 +3018,7 @@ class App(tk.Tk):
                            width=5, values=["1", "2", "3", "5", "10"])
         icb.pack(side="left")
         icb.bind("<<ComboboxSelected>>", lambda e: self._np_on_interval())
-        self.np_state_lbl = ttk.Label(bar, text="● 未连接", style="Hint.TLabel")
+        self.np_state_lbl = ttk.Label(bar, text="● 未连接", style="Status.TLabel")
         self.np_state_lbl.pack(side="right", padx=6)
 
         body = ttk.Frame(f, padding=(10, 4))
@@ -2988,7 +3052,8 @@ class App(tk.Tk):
         ctl._sq_bg = "surface"
         ctl.pack(fill="x", pady=(0, 8))
         for i in range(3):
-            ctl.columnconfigure(i, weight=1)
+            # v1.6.0 设计映射 §四：uniform 保证三列等宽，防止「下一首」被挤出画面
+            ctl.columnconfigure(i, weight=1, uniform="transport")
         ttk.Button(ctl, text="◀ 上一首", style="Tool.TButton",
                    command=lambda: self._np_cmd(["playlist", "index", "-1"])
                    ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
@@ -3008,15 +3073,16 @@ class App(tk.Tk):
         # ---------------- 右：曲目 + 音频链路 + 三视图 ----------------
         right = ttk.Frame(body)
         right.pack(side="left", fill="both", expand=True)
-        self.np_title = ttk.Label(right, text="—", style="Title.TLabel", anchor="w")
+        self.np_title = ttk.Label(right, text="—", style="Hero.TLabel",
+                                  anchor="w", wraplength=420, justify="left")
         self.np_title.pack(fill="x")
-        self.np_artist = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
+        self.np_artist = ttk.Label(right, text="", style="Subtitle.TLabel", anchor="w")
         self.np_artist.pack(fill="x", pady=(2, 0))
-        self.np_album = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
+        self.np_album = ttk.Label(right, text="", style="Caption.TLabel", anchor="w")
         self.np_album.pack(fill="x", pady=(2, 0))
         self.np_prog = ttk.Progressbar(right, mode="determinate", maximum=100, value=0)
         self.np_prog.pack(fill="x", pady=(8, 2))
-        self.np_meta = ttk.Label(right, text="", style="Hint.TLabel", anchor="w")
+        self.np_meta = ttk.Label(right, text="", style="Caption.TLabel", anchor="w")
         self.np_meta.pack(fill="x")
 
         ac = self._np_card(right)
@@ -3027,10 +3093,10 @@ class App(tk.Tk):
         ahdr = tk.Frame(ain, background=C["surface"])
         ahdr._sq_bg = "surface"
         ahdr.pack(fill="x")
-        self._np_label(ahdr, "音频链路", "text2", 9, True).pack(side="left")
-        self.np_audio_verdict = self._np_label(ahdr, "等待曲目…", "text2", 10, True)
+        self._np_label(ahdr, "音频链路", "text2", 11, True).pack(side="left")  # overline
+        self.np_audio_verdict = self._np_label(ahdr, "等待曲目…", "text2", 11, True)
         self.np_audio_verdict.pack(side="right")
-        self.np_audio_spec = self._np_label(ain, "—", "text", 10)
+        self.np_audio_spec = self._np_label(ain, "—", "text", 12)
         self.np_audio_spec.pack(fill="x", pady=(7, 2))
         self.np_audio_out = self._np_label(ain, "实际解码：—", "text2", 9)
         self.np_audio_out.pack(fill="x")
@@ -3050,7 +3116,7 @@ class App(tk.Tk):
         ttk.Button(vbar, text="⛶ 专注大屏", style="Tool.TButton",
                    command=self._focus_open).pack(side="right")
         self.np_src_lbl = ttk.Label(right, text=self._np_src_text,
-                                    style="Rec.TLabel", anchor="w")
+                                    style="Overline.TLabel", anchor="w")
         self.np_src_lbl.pack(fill="x", pady=(2, 3))
 
         self.np_view_host = ttk.Frame(right)
@@ -3681,16 +3747,16 @@ class App(tk.Tk):
         info = tk.Frame(main, background=C["bg"])
         info._sq_bg = "bg"
         info.pack(side="left", fill="both", expand=True)
-        self.focus_title = self._focus_label(info, "—", "text", 26, True)
+        self.focus_title = self._focus_label(info, "—", "text", 56, True)  # heroFocus
         self.focus_title.configure(wraplength=620, justify="left")
         self.focus_title.pack(anchor="w", pady=(30, 8))
-        self.focus_artist = self._focus_label(info, "", "text2", 15)
+        self.focus_artist = self._focus_label(info, "", "text2", 18)
         self.focus_artist.configure(wraplength=620, justify="left")
         self.focus_artist.pack(anchor="w")
         self.focus_album = self._focus_label(info, "", "text3", 12)
         self.focus_album.configure(wraplength=620, justify="left")
         self.focus_album.pack(anchor="w", pady=(4, 24))
-        self.focus_lyric = self._focus_label(info, "", "primary", 18)
+        self.focus_lyric = self._focus_label(info, "", "primary", 20)
         self.focus_lyric.configure(wraplength=620, justify="center")
         self.focus_lyric.pack(fill="both", expand=True, pady=10)
 
@@ -3760,7 +3826,9 @@ class App(tk.Tk):
             C = self.C
             self.focus_cover_box.configure(highlightbackground=C["border"])
             self.focus_exit.configure(activebackground=C["primary_dark"],
-                                      activeforeground=C["on_app_bar"])
+                                      activeforeground=C["on_primary"],
+                                      background=C["surface"],
+                                      foreground=C["text"])
         except Exception:
             pass
 
@@ -3995,7 +4063,7 @@ class App(tk.Tk):
         lpin.pack(fill="both", expand=True, padx=1, pady=1)
         self.lib_tree = ttk.Treeview(
             lpin, columns=("name", "info"), show="tree headings",
-            height=16, style="Lib.Treeview")
+            height=16, style="Item.Treeview")
         self.lib_tree.heading("#0", text="封面")
         self.lib_tree.column("#0", width=68, stretch=False, anchor="center")
         self.lib_tree.heading("name", text="名称")
@@ -4033,10 +4101,10 @@ class App(tk.Tk):
         self.lib_cover_lbl._sq_fg = "text3"
         self.lib_cover_lbl.pack(fill="both", expand=True)
 
-        self.lib_title_lbl = self._lib_label(rpin, "—", "text", 13, True)
+        self.lib_title_lbl = self._lib_label(rpin, "—", "text", 24, True)  # PageTitle
         self.lib_title_lbl.configure(anchor="w", justify="left", wraplength=272)
         self.lib_title_lbl.pack(fill="x")
-        self.lib_sub_lbl = self._lib_label(rpin, "选择左侧条目查看详情", "text2", 10)
+        self.lib_sub_lbl = self._lib_label(rpin, "选择左侧条目查看详情", "text2", 17)  # Subtitle
         self.lib_sub_lbl.configure(anchor="w", justify="left", wraplength=272)
         self.lib_sub_lbl.pack(fill="x", pady=(2, 8))
         self._lib_rule(rpin).pack(fill="x", pady=(0, 8))

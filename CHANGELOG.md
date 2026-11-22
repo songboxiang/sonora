@@ -3,6 +3,44 @@
 本项目遵循语义化版本：发布时同步更新 `squeezelite_gui.py` 中的 `VERSION`
 常量，并打附注标签 `vX.Y.Z`。
 
+## v1.6.0 (2026-11-22) — 设计交付包落地：设计令牌 / 字号层级 / 组件样式全量替换
+
+- **设计令牌灌入**：按 `design-tokens.json` v1.1 把浅 / 深两套共 40 个令牌
+  精确写入 `THEMES`（每套 40 键、值均为 `#RRGGBB`）。新增 `topbar`、
+  `card_border`、`muted`、`on_accent`、`brand` / `brand_decorative`、
+  `error`、`hover`、`selected`、`disabled`、`divider`、`prog_bg` /
+  `prog_fg`、`cover_pad` 等键；`primary` 改为可交互主色
+  （浅 `#2F6B52` / 深 `#7CC7A6`，WCAG AA 正文对比 6.01 / 8.60），
+  Lyrion 原色保留为 `brand` 仅用于进度条与装饰。
+- **对比度达标**：正文 / 次要文字 / 主色 / 主色上文字在两套主题下均 ≥ 4.5:1，
+  进度条填充对表面 ≥ 3.0:1；主题分段未选中项改用 `text2`，修复「只有
+  选中可读」的历史问题。
+- **字号层级**：新增 42 / 56 / 24 / 17 / 12 / 10 六级字体令牌
+  （hero / heroFocus / title / subtitle / caption / overline）；正在播放曲名
+  切到 `Hero.TLabel`（42），歌手 `Subtitle.TLabel`（18），专辑 / 元数据
+  `Caption.TLabel`（13），专注大屏曲名 56。
+- **落地补齐（同版本内二次打磨）**：修复首版「样式注册但 0 引用」的问题，
+  把 `Status.TLabel` / `Error.TLabel` / `Ok.TLabel` / `Overline.TLabel` /
+  `Top.TFrame` / `Danger.TButton` / `Item.Treeview` 真正接到控件；正文 11→12、
+  小字 9→10、小节标题 15→17，音乐库专辑名 13→24 / 副标题 10→17，专注歌词
+  18→20；顺带修复校验结果用 `foreground=` 给 ttk 控件上色无效的旧问题，
+  改为 Error/Ok 样式切换。参数页保持克制字号（255 个控件，放大只会拥挤）。
+  多分辨率溢出检测：1120×760 / 1200×820 / 1440×900 × 正在播放 / 音乐库 /
+  升级页全部 0 溢出。
+- **组件样式**：按 `mapping.md` 的 To-Create 清单新增 `Top.TFrame`、
+  `PageTitle.TLabel`、`Subtitle.TLabel`、`Caption.TLabel`、`Overline.TLabel`、
+  `HeroFocus.TLabel`、`Error.TLabel`、`Badge.TLabel`、`Status.TLabel`、
+  `Danger.TButton`、`Item.Treeview` 共 11 个 `ttk.Style`；进度条加厚至 8px
+  并用品牌色填充，`Item.Treeview` / `Lib.Treeview` 行高 56。
+- **布局细节**：顶栏高度 64 → 48，产品名调整为「Squeezelite GUI」；
+  窗口 `minsize` 1120×760；播放控制三列加 `uniform="transport"` 保证等宽、
+  防止「下一首」在窄窗口被挤出；封面 44 / 272 / 280 / 420 全部统一正方形。
+- **设计交付物归档**：本次落地依据 `squeezelite-gui-design/` 的
+  `design-tokens.json` / `mapping.md` / `components.md` / `states.md` /
+  `screens/` 共 7 项交付物与 5 张设计稿，映射关系见 `docs/UI_DESIGN_BRIEF.md`。
+- 回归：设计令牌 / 对比度 / 样式 / 布局常量逻辑断言全绿；X11 真实 GUI 冒烟
+  15 项通过（三态换肤、样式解析、专注窗开关、minsize）；封面正方形 4 项通过。
+
 ## v1.5.1 (2026-11-22) — 修正 MAI 插件命令，真正从 LMS 接收简介与歌词
 
 - **问题定位**：真实 LMS 9.1.1 抽样发现服务端**已安装** Music & Artist
