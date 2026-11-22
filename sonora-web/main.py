@@ -47,7 +47,7 @@ _probe_bundled_squeezelite()
 import webview
 from api import api as bridge_api
 
-VERSION = "2.0.4"
+VERSION = "2.0.5"
 
 
 def main():

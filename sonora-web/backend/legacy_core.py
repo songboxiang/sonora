@@ -170,6 +170,7 @@ DEFAULT_CONFIG = {
     "extra": "",
     "lms_host": "",
     "lms_port": "9000",
+    "slim_port": "3483",  # SlimProto 端口（-s），区别于 HTTP 9000
     "install_method": "auto",
     "brew_formula": "tsirysndr/tap/squeezelite",
     "sources": {},
@@ -193,12 +194,12 @@ PARAMS = [
      "default":"","recommend":"",
      "options":[
         ("", "自动发现（不传 -s）", "通过 UDP 广播自动发现同网段 LMS，最省心；跨网段或发现失败时改用手动指定"),
-        ("127.0.0.1:9000", "本机 127.0.0.1:9000", "LMS 与播放器在同一台 Mac 时使用，连接最稳"),
-        ("{LMS_HOST}", "使用「升级」页填写的服务器地址", "自动填入 LMS 主机:端口，避免两处重复维护"),
+        ("127.0.0.1:3483", "本机 127.0.0.1:3483", "LMS 与播放器在同一台 Mac 时使用，连接最稳（3483 是 SlimProto 端口）"),
+        ("{LMS_HOST}", "使用「升级」页填写的服务器地址", "自动填入 LMS 主机 + SlimProto 端口 3483，避免两处重复维护"),
      ],
      "effect":"决定播放器连接哪台 LMS；留空则由 squeezelite 自动发现。",
-     "detail":"格式 host[:port]，端口默认 9000。自动发现依赖 UDP 3483，跨 VLAN/路由器时通常无效，此时必须手动指定。",
-     "range":"IP / 主机名 [ :端口 ]，如 192.168.1.10:9000；留空=自动发现"},
+     "detail":"格式 host[:port]，端口是 SlimProto 端口，默认 3483（不是 HTTP 9000）。自动发现依赖 UDP 3483 广播，跨 VLAN/路由器时通常无效，此时必须手动指定。",
+     "range":"IP / 主机名 [ :3483 ]，如 192.168.1.10:3483；留空=自动使用 LMS 地址 + 3483"},
 
     {"key":"name","flag":"-n","name":"播放器名称 (-n)","group":"连接","platform":"all","kind":"text",
      "default":"","recommend":"",
@@ -669,9 +670,16 @@ def resolve_special(v, cfg):
     if not v:
         return v
     host = (cfg.get("lms_host") or "").strip()
-    port = (cfg.get("lms_port") or "9000").strip()
-    if host and not re.search(r":\d+$", host):
-        host = host + ":" + port
+    if host:
+        if "://" in host:
+            host = host.split("://", 1)[1]
+        host = host.rstrip("/")
+        if host.startswith("["):
+            host = host.split("]", 1)[0] + "]"
+        elif ":" in host:
+            host = host.rsplit(":", 1)[0]
+        slim = str(cfg.get("slim_port") or "3483").strip() or "3483"
+        host = host + ":" + slim
     return v.replace("{LMS_HOST}", host).replace("{HOST}", host)
 
 PARAM_VALIDATORS = {
@@ -702,11 +710,53 @@ def validate_param(p, v):
         return False, "DSD 格式应为 dop/u8/u16le/u16be/u32le/u32be（可加 延迟: 前缀）"
     return True, ""
 
+def _link_values(cfg, values):
+    """把「设备与名称」页 / LMS 页维护的配置联动到 squeezelite 启动参数。
+
+    此前 server / name / output 三个字段只在界面回显，从未进入 argv：
+    没有 -s 就只能靠 UDP 自动发现（跨网段/远程 LMS 必然失败），
+    没有 -n / -o 则播放器名和输出设备也不受界面控制。
+    所有构建命令的入口统一经过这里，保证界面选择与真实命令一致。
+    """
+    eff = dict(values or {})
+    # 1) LMS 地址：参数页留空时，自动使用「升级与更新」页填写的服务器
+    if not str(eff.get("server") or "").strip():
+        host = str(cfg.get("lms_host") or "").strip()
+        if host:
+            if "://" in host:
+                host = host.split("://", 1)[1]
+            host = host.rstrip("/")
+            if host.startswith("["):
+                host = host.split("]", 1)[0] + "]"
+            elif ":" in host:
+                host = host.rsplit(":", 1)[0]
+            slim = str(cfg.get("slim_port") or "3483").strip() or "3483"
+            eff["server"] = host + ":" + slim
+    # 2) 播放器名：使用「设备与名称」页生成的名字
+    if not str(eff.get("name") or "").strip():
+        try:
+            nm = make_player_name(
+                cfg.get("host_name") or local_host_name(),
+                cfg.get("device_short") or "",
+                cfg.get("name_template") or "{host} - {short}")
+        except Exception:
+            nm = ""
+        if nm:
+            eff["name"] = nm
+    # 3) 输出设备：使用「设备与名称」页选中的设备
+    if not str(eff.get("output") or "").strip():
+        dev = str(cfg.get("device") or "").strip() or str(cfg.get("device_name") or "").strip()
+        if dev:
+            eff["output"] = dev
+    return eff
+
+
 def build_argv(cfg, values):
     binary = find_binary(cfg) or "squeezelite"
     argv = [binary]
+    eff = _link_values(cfg, values)
     for p in PARAMS:
-        v = values.get(p["key"], p.get("default", ""))
+        v = eff.get(p["key"], p.get("default", ""))
         if v is None:
             continue
         v = str(v).strip()

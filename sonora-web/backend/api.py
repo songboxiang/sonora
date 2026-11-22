@@ -43,7 +43,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.4"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.5"}
 
 
 @_wrap
@@ -446,8 +446,11 @@ def getLaunchInfo():
         k = pdef["key"]
         values[k] = CFG.get(k, pdef.get("default", ""))
     argv = c.build_argv(CFG, values)
+    ver = c.sq_local_version(binary) if binary else None
+    if isinstance(ver, dict):
+        ver = ver.get("version") or ver.get("raw") or ""
     return {"binary": binary, "command": c.preview_cmd(argv),
-            "version": c.sq_local_version(binary) if binary else "",
+            "version": ver or "",
             "autoRun": bool(CFG.get("auto_start")),
             "problems": c.validate_all(values, CFG.get("extra", ""))}
 
@@ -1061,6 +1064,8 @@ def startEngine():
     for pdef in c.PARAMS:
         k = pdef["key"]
         values[k] = CFG.get(k, pdef.get("default", ""))
+    # 用联动补全后的真实参数校验（server/name/output 来自其它设置页）
+    values = c._link_values(CFG, values)
     problems = c.validate_all(values, CFG.get("extra", ""))
     if problems:
         return {"ok": False, "error": "参数校验未通过：\n" + "\n".join(problems)}
