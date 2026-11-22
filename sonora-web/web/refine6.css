@@ -1,0 +1,74 @@
+/* ============================================================
+   refine6.css — v2.0.9 专注模式布局修复
+   1) 顶部控件不漏边穿帮
+   2) 歌名/meta 固定在顶部不被歌词挤出裁切
+   ============================================================ */
+
+/* 顶部栏：控件永不溢出，窄窗口自动换行，退出键始终可见 */
+.focus-screen .focus-top{
+  flex-wrap:wrap;
+  justify-content:flex-start;
+  gap:10px;
+  padding:12px 22px;
+  box-sizing:border-box;
+  min-height:52px;
+  flex:none;                 /* 不参与内容区高度分配，固定占位 */
+  max-width:100vw;
+  overflow:visible;
+}
+.focus-screen .focus-top .spacer{ flex:1 1 auto; }
+.focus-screen .focus-mode,
+.focus-screen .focus-toggles{ flex:none; }
+.focus-screen .focus-exit{ flex:none; margin-left:auto; }
+
+/* 内容区：改为 flex 列布局，让 cover 与 mid 垂直居中但不溢出 */
+.focus-screen .focus-content{
+  height:auto;
+  flex:1 1 auto;
+  min-height:0;              /* 允许子元素收缩，防止撑破被裁 */
+  align-items:center;
+  overflow:hidden;
+  box-sizing:border-box;
+}
+
+/* 中部：meta 固定在顶部，歌词独立滚动，绝不把标题顶出去 */
+.focus-screen .focus-mid{
+  height:100%;
+  max-height:100%;
+  padding:8px 0 0;
+  box-sizing:border-box;
+  justify-content:flex-start;   /* 标题贴顶，不再垂直居中导致顶部溢出 */
+  overflow:hidden;
+}
+.focus-screen .focus-meta{
+  flex:none;                  /* 标题区不参与收缩，永不被挤压 */
+  width:100%;
+  padding:6px 0 10px;
+  box-sizing:border-box;
+}
+.focus-screen .focus-title{
+  max-width:100%;
+  overflow:visible;
+  line-height:1.2;
+  word-break:break-word;
+}
+.focus-screen .focus-lyrics{
+  flex:1 1 auto;
+  min-height:0;               /* 关键：允许在 flex 中收缩并独立滚动 */
+  overflow:auto;
+  overscroll-behavior:contain;
+  margin-top:14px;
+}
+
+/* 底部控制区：固定在底部，独立占位 */
+.focus-screen .focus-bottom{
+  flex:none;
+  position:relative;          /* 由 flex 布局定位，不再 absolute 叠加到内容上 */
+  padding:6px 40px 20px;
+  box-sizing:border-box;
+}
+/* 让 focus-screen 成为纵向 flex 容器，三段（top/content/bottom）顺序占位 */
+.focus-screen{
+  display:flex;
+  flex-direction:column;
+}

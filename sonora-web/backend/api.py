@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.8"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.9"}
 
 
 @_wrap
@@ -274,9 +274,10 @@ def playControl(cmd):
         pid = str(pick.get("id", "")) if pick else ""
     if not pid:
         return {"ok": False, "error": "no player"}
-    rpc_map = {"play": "play", "pause": "pause", "stop": "stop",
-               "next": "playlist jump +1", "prev": "playlist jump -1"}
-    c.lms_rpc(CFG, [rpc_map[cmd]], pid, _id=60)
+    # 注意：lms_rpc 内部会 list(cmd)，必须传列表；传字符串会被拆成单字符导致 LMS 断连
+    rpc_map = {"play": ["play"], "pause": ["pause"], "stop": ["stop"],
+               "next": ["playlist", "jump", "+1"], "prev": ["playlist", "jump", "-1"]}
+    c.lms_rpc(CFG, rpc_map[cmd], pid, _id=60)
     return {"ok": True, "cmd": cmd}
 
 
@@ -823,79 +824,89 @@ def _pl_items(r):
 
 
 FAV_PLAYLIST_NAME = "♥ 收藏"
+FAV_LOCAL_ID = "__local_favorites__"   # 虚拟列表 id，前端据此识别收藏列表
 
+def _fav_file():
+    return os.path.join(os.path.expanduser("~/.squeezelite_gui"), "favorites.json")
+
+def _fav_load():
+    """读取本地收藏（曲目 id -> 元信息）。完全本地，不依赖 LMS 播放列表接口。"""
+    try:
+        with open(_fav_file(), "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _fav_save(d):
+    try:
+        path = _fav_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
 
 def _fav_playlist():
-    """找到（或自动创建）固定的收藏播放列表，返回其 id。"""
-    r = _rpc_server(["playlists"], _id=120)
-    for it in _pl_items(r):
-        if it.get("name") == FAV_PLAYLIST_NAME:
-            return it.get("id") or ""
-    # 不存在则创建
-    _rpc_server(["playlists", "new", FAV_PLAYLIST_NAME], _id=121)
-    r2 = _rpc_server(["playlists"], _id=122)
-    for it in _pl_items(r2):
-        if it.get("name") == FAV_PLAYLIST_NAME:
-            return it.get("id") or ""
-    return ""
+    """兼容旧调用：返回虚拟收藏列表 id（本地收藏，恒可用）。"""
+    return FAV_LOCAL_ID
 
 
 @_wrap
 def getFavorites():
-    """获取固定收藏列表：返回曲目 id 集合（用于心形点亮）。"""
-    pid = _fav_playlist()
-    if not pid:
-        return {"ok": False, "items": [], "ids": [], "error": "无法获取收藏列表"}
-    r = _rpc_server(["playlists", "tracks", pid, "0", "500"], _id=123)
-    loop = (r.get("playlist_tracks_loop") or r.get("titles_loop")
-            or r.get("playlist_loop") or [])
-    ids, items = [], []
-    for it in loop:
-        if not isinstance(it, dict):
-            continue
-        tid = str(it.get("id") or it.get("track_id") or "")
-        ids.append(tid)
-        items.append({"id": tid, "title": str(it.get("title") or ""),
-                      "artist": str(it.get("artist") or ""), "album": str(it.get("album") or "")})
-    return {"ok": True, "playlistId": pid, "ids": ids, "items": items}
+    """获取收藏列表：本地持久化，即时可用；不再依赖 LMS 播放列表接口。"""
+    d = _fav_load()
+    items = []
+    for tid, meta in d.items():
+        if not isinstance(meta, dict):
+            meta = {}
+        items.append({"id": str(tid), "title": str(meta.get("title") or ""),
+                      "artist": str(meta.get("artist") or ""), "album": str(meta.get("album") or "")})
+    return {"ok": True, "playlistId": FAV_LOCAL_ID,
+            "ids": [x["id"] for x in items], "items": items}
 
 
 @_wrap
-def toggleFavorite(trackId, favorited=None):
-    """收藏/取消收藏曲目：自动加入或移出固定「♥ 收藏」列表。
-    favorited=None 表示切换；True 强制收藏；False 强制取消。"""
+def toggleFavorite(trackId, favorited=None, meta=None):
+    """收藏/取消收藏曲目：写入本地持久化。favorited=None 表示切换。
+    meta 可带 title/artist/album，便于收藏列表显示名称。"""
     tid = str(trackId or "")
     if not tid:
         return {"ok": False, "error": "缺少曲目 ID"}
-    pid = _fav_playlist()
-    if not pid:
-        return {"ok": False, "error": "无法获取收藏列表"}
-    fav = getFavorites()
-    ids = list(fav.get("ids") or [])
-    has = tid in ids
+    d = _fav_load()
+    has = tid in d
     want = (not has) if favorited is None else bool(favorited)
     if want and not has:
-        _rpc_server(["playlists", "add", pid, tid], _id=124)
+        m = meta if isinstance(meta, dict) else {}
+        d[tid] = {"title": str(m.get("title") or ""), "artist": str(m.get("artist") or ""),
+                  "album": str(m.get("album") or "")}
     elif not want and has:
-        # 从后往前删除所有同名曲目，避免重复收藏残留导致取消后仍在列表内
-        for idx in [i for i, x in enumerate(ids) if x == tid][::-1]:
-            _rpc_server(["playlists", "del", pid, str(idx)], _id=125)
-    return {"ok": True, "favorited": want, "playlistId": pid, "trackId": tid}
+        d.pop(tid, None)
+    if not _fav_save(d):
+        return {"ok": False, "error": "本地收藏写入失败"}
+    return {"ok": True, "favorited": want, "playlistId": FAV_LOCAL_ID, "trackId": tid}
 
 
 @_wrap
 def getPlaylists():
-    r = _rpc_server(["playlists"], _id=92)
-    items = _pl_items(r)
-    favpid = _fav_playlist()
-    for p in items:
-        if str(p.get("id")) == str(favpid):
-            p["locked"] = True
-            p["isFav"] = True
+    """播放列表：LMS 列表 + 置顶虚拟「♥ 收藏」列表（本地收藏）。"""
+    try:
+        r = _rpc_server(["playlists"], _id=92)
+        items = _pl_items(r)
+    except Exception:
+        items = []
+    # 始终注入本地收藏列表，确保下拉里一定有收藏入口
+    fav = _fav_load()
+    items = [p for p in items if str(p.get("id")) != FAV_LOCAL_ID]
+    items.insert(0, {"id": FAV_LOCAL_ID, "name": FAV_PLAYLIST_NAME,
+                     "trackcount": len(fav), "locked": True, "isFav": True})
     return {"items": items}
 
 
-@_wrap
+
 def createPlaylist(name):
     name = str(name or "").strip()
     if not name:
@@ -934,6 +945,8 @@ def playlistAdd(playlistId, trackId):
     pid, tid = str(playlistId or ""), str(trackId or "")
     if not pid or not tid:
         return {"ok": False, "error": "缺少播放列表或曲目 ID"}
+    if pid == FAV_LOCAL_ID:
+        return toggleFavorite(tid, True)
     _rpc_server(["playlists", "add", pid, tid], _id=96)
     return {"ok": True}
 
@@ -952,6 +965,16 @@ def playlistTracks(playlistId):
     pid = str(playlistId or "")
     if not pid:
         return {"items": [], "ok": False, "error": "缺少播放列表 ID"}
+    if pid == FAV_LOCAL_ID:
+        fav = _fav_load()
+        items = []
+        for tid, meta in fav.items():
+            m = meta if isinstance(meta, dict) else {}
+            d = {"id": str(tid), "title": str(m.get("title") or ""),
+                 "artist": str(m.get("artist") or ""), "album": str(m.get("album") or "")}
+            d["_name"] = d["title"] or d["album"] or d["id"]
+            items.append(d)
+        return {"items": items, "total": len(items)}
     r = _rpc_server(["playlists", "tracks", pid, "0", "500"], _id=98)
     loop = (r.get("playlist_tracks_loop") or r.get("titles_loop")
             or r.get("playlist_loop") or [])
@@ -1365,7 +1388,7 @@ class BridgeAPI:
     def libInfo(self, item): return libInfo(item)
     # 收藏
     def getFavorites(self): return getFavorites()
-    def toggleFavorite(self, trackId, favorited=None): return toggleFavorite(trackId, favorited)
+    def toggleFavorite(self, trackId, favorited=None, meta=None): return toggleFavorite(trackId, favorited, meta)
     def getPlaylists(self): return getPlaylists()
     def createPlaylist(self, name): return createPlaylist(name)
     def deletePlaylist(self, playlistId): return deletePlaylist(playlistId)
