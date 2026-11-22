@@ -107,7 +107,7 @@ window.__LAUNCH__ = {binary:'/opt/homebrew/bin/squeezelite', command:'squeezelit
 window.__FAV_IDS__ = ['t1','t3'];
 window.__QUEUE__ = {items:window.__QUEUE_ITEMS__,index:0,mode:'0 0',ok:true};
 window.__DRILL__ = {};
-window.__UPDATES__ = {local:'v2.0.6', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
+window.__UPDATES__ = {local:'v2.0.7', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
 window.__CHANGELOG__ = {items:[],source:'preview'};
 (function(){
   const base = {

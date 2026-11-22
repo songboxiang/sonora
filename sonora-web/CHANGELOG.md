@@ -6,6 +6,20 @@
 
 
 
+## v2.0.7 (2026-11-22) — 根治「引擎进程卡 SYN_SENT 连不上 LMS」
+
+- **真机确诊**：app 用 `subprocess.Popen`（fork）派生的 squeezelite 子进程 TCP 连接
+  永远卡在 SYN_SENT（连不上 LMS:3483），而同一个二进制用 shell / posix_spawn
+  启动则瞬间 ESTABLISHED。这是 PyInstaller/WKWebView 进程 fork 后网络栈的问题，
+  与 -s 参数、认证、防火墙、代理、沙盒均无关（均已真机排除）。
+- **根治方案**：macOS 上改用 `os.posix_spawn` + 临时日志文件 + tail 读取线程
+  替代 Popen，彻底规避 fork 的 SYN_SENT bug；引擎守护线程改为 tail 日志模式，
+  保留实时日志、退出检测与看门狗自动重启。
+- **状态修复**：startEngine/stopEngine 返回值与 _engine_alive 全面适配 spawn_pid，
+  用 waitpid(WNOHANG) 避免停止后僵尸进程误判为"仍在运行"。
+- **端到端验证（真机）**：启动→SlimProto connected→`[注册验证] ✅ 播放器已在
+  LMS 上线`→LMS players=1→停止→running=False，全部通过。
+
 ## v2.0.6 (2026-11-22) — 真机诊断后彻底修复引擎存活与注册可见性
 
 - **真机实测结论**：手动用相同二进制+命令启动，播放器 2 秒内 `connected=1`；

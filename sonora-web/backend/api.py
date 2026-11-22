@@ -12,6 +12,8 @@ import base64
 import traceback
 import subprocess
 import threading
+import tempfile
+import signal
 import time as _time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.6"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.7"}
 
 
 @_wrap
@@ -1022,16 +1024,55 @@ def _engine_log(line):
 
 
 def _engine_reader(proc):
-    """守护线程：持续读进程 stdout，记录日志并检测退出。"""
+    """守护线程：持续读引擎输出，记录日志并检测退出。
+    macOS 用 posix_spawn + 日志文件（规避 fork 的 SYN_SENT bug）；
+    其他平台仍用 Popen 的 stdout pipe。"""
+    code = None
+    log_path = _ENGINE.get("log_path", "")
+    spawn_pid = _ENGINE.get("spawn_pid", 0)
     try:
-        for line in iter(proc.stdout.readline, ""):
-            _engine_log(line)
+        if log_path:
+            # tail 日志文件模式
+            import time as _t
+            f = open(log_path, "r", encoding="utf-8", errors="replace")
+            while True:
+                line = f.readline()
+                if line:
+                    _engine_log(line)
+                    continue
+                # 检查进程是否退出
+                exited = False
+                if spawn_pid:
+                    try:
+                        os.kill(spawn_pid, 0)
+                    except OSError:
+                        exited = True
+                elif proc is not None:
+                    exited = (proc.poll() is not None)
+                if exited:
+                    # 读完剩余日志
+                    for rest in f:
+                        _engine_log(rest)
+                    f.close()
+                    code = 0
+                    try:
+                        if spawn_pid:
+                            _, st = os.waitpid(spawn_pid, os.WNOHANG)
+                            code = os.waitstatus_to_exitcode(st) if st is not None else 0
+                        elif proc is not None:
+                            code = proc.poll()
+                    except Exception:
+                        pass
+                    break
+                _t.sleep(0.2)
+        else:
+            for line in iter(proc.stdout.readline, ""):
+                _engine_log(line)
     except Exception as e:
         _engine_log("[reader] %s" % e)
     finally:
-        code = proc.poll()
         with _ENGINE_LOCK:
-            _ENGINE["exit_code"] = code
+            _ENGINE["exit_code"] = code if code is not None else (proc.poll() if proc else 0)
             _ENGINE["logs"].append("[进程已退出 code=%s]" % code)
         _engine_log("[引擎进程结束 code=%s]" % code)
         # 意外退出（非手动停止）时自动重启，最多 3 次
@@ -1053,6 +1094,20 @@ def _engine_reader(proc):
 
 
 def _engine_alive():
+    sp = _ENGINE.get("spawn_pid", 0)
+    if sp:
+        # 手动停止后 waitpid 回收，避免僵尸进程误判为“仍在运行”
+        if _ENGINE.get("manual_stop"):
+            try:
+                os.waitpid(sp, os.WNOHANG)
+            except Exception:
+                pass
+            return False
+        try:
+            os.kill(sp, 0)
+            return True
+        except OSError:
+            return False
     p = _ENGINE["proc"]
     return bool(p and p.poll() is None)
 
@@ -1095,17 +1150,36 @@ def startEngine():
     if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
         return {"ok": False,
                 "error": "找不到可执行的 squeezelite：%s\n\n请到「播放器引擎」页指定二进制路径，或到「升级与更新」页安装 squeezelite。" % binary}
-    try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True,
-                                bufsize=1, creationflags=(0x08000000 if sys.platform == "win32" else 0))
-    except Exception as e:
-        return {"ok": False, "error": "启动失败：%s" % str(e)[:200]}
+    # macOS 上 PyInstaller/WKWebView 进程用 fork 派生子进程时，
+    # 子进程的 TCP 连接会卡在 SYN_SENT（真机实测）。改用 posix_spawn 规避。
+    log_path = ""
+    spawn_pid = 0
+    proc = None
+    if sys.platform == "darwin" and hasattr(os, "posix_spawn"):
+        try:
+            fd, log_path = tempfile.mkstemp(prefix="sonora-sq-", suffix=".log")
+            os.close(fd)
+            logf = open(log_path, "ab", buffering=0)
+            file_actions = [(os.POSIX_SPAWN_DUP2, logf.fileno(), 1),
+                            (os.POSIX_SPAWN_DUP2, logf.fileno(), 2)]
+            spawn_pid = os.posix_spawn(argv[0], argv, os.environ, file_actions=file_actions)
+            logf.close()
+        except Exception as e:
+            return {"ok": False, "error": "启动失败(posix_spawn)：%s" % str(e)[:200]}
+    else:
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True,
+                                    bufsize=1, creationflags=(0x08000000 if sys.platform == "win32" else 0))
+        except Exception as e:
+            return {"ok": False, "error": "启动失败：%s" % str(e)[:200]}
     with _ENGINE_LOCK:
         _ENGINE["manual_stop"] = False
         _ENGINE["restarts"] = 0
         _ENGINE["proc"] = proc
-        _ENGINE["pid"] = proc.pid
+        _ENGINE["pid"] = spawn_pid if spawn_pid else proc.pid
+        _ENGINE["log_path"] = log_path
+        _ENGINE["spawn_pid"] = spawn_pid
         _ENGINE["start_ts"] = _time.time()
         _ENGINE["logs"] = ["$ %s\n" % c.preview_cmd(argv)]
         _ENGINE["exit_code"] = None
@@ -1137,8 +1211,9 @@ def startEngine():
         except Exception as e:
             _engine_log("[注册验证] 查询失败: %s" % str(e)[:100])
     threading.Thread(target=_verify, daemon=True).start()
-    return {"ok": True, "pid": proc.pid, "command": c.preview_cmd(argv),
-            "message": "squeezelite 已启动 (PID %s)，正在注册到 LMS…" % proc.pid}
+    final_pid = spawn_pid if spawn_pid else (proc.pid if proc else 0)
+    return {"ok": True, "pid": final_pid, "command": c.preview_cmd(argv),
+            "message": "squeezelite 已启动 (PID %s)，正在注册到 LMS…" % final_pid}
 
 
 @_wrap
@@ -1146,18 +1221,22 @@ def stopEngine():
     """停止 squeezelite 进程。"""
     if not _engine_alive():
         return {"ok": True, "already": True, "message": "引擎未在运行"}
+    sp = _ENGINE.get("spawn_pid", 0)
     p = _ENGINE["proc"]
     try:
-        p.terminate()
-        try:
-            p.wait(timeout=4)
-        except Exception:
-            p.kill()
+        if sp:
+            os.kill(sp, signal.SIGTERM)
+        elif p:
+            p.terminate()
+            try:
+                p.wait(timeout=4)
+            except Exception:
+                p.kill()
     except Exception as e:
         return {"ok": False, "error": "停止失败：%s" % str(e)[:150]}
     with _ENGINE_LOCK:
         _ENGINE["manual_stop"] = True
-        _ENGINE["exit_code"] = p.poll()
+        _ENGINE["exit_code"] = (p.poll() if p else 0)
         _ENGINE["logs"].append("[已停止引擎]")
     return {"ok": True, "message": "squeezelite 已停止"}
 
