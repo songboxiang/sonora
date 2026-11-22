@@ -43,7 +43,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.5"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.6"}
 
 
 @_wrap
@@ -1034,6 +1034,22 @@ def _engine_reader(proc):
             _ENGINE["exit_code"] = code
             _ENGINE["logs"].append("[进程已退出 code=%s]" % code)
         _engine_log("[引擎进程结束 code=%s]" % code)
+        # 意外退出（非手动停止）时自动重启，最多 3 次
+        with _ENGINE_LOCK:
+            manual = _ENGINE.get("manual_stop", False)
+            restarts = _ENGINE.get("restarts", 0)
+        if not manual and restarts < 3:
+            _engine_log("[看门狗] 引擎意外退出，%s 秒后自动重启（%s/3）" % (2, restarts + 1))
+            def _restart():
+                import time as _t
+                _t.sleep(2)
+                try:
+                    with _ENGINE_LOCK:
+                        _ENGINE["restarts"] = _ENGINE.get("restarts", 0) + 1
+                    startEngine()
+                except Exception as e:
+                    _engine_log("[看门狗] 重启失败: %s" % str(e)[:100])
+            threading.Thread(target=_restart, daemon=True).start()
 
 
 def _engine_alive():
@@ -1070,8 +1086,11 @@ def startEngine():
     if problems:
         return {"ok": False, "error": "参数校验未通过：\n" + "\n".join(problems)}
     argv = c.build_argv(CFG, values)
-    if not any("output=" in str(a) for a in argv):
-        argv += ["-d", "output=info"]
+    # 打开 SlimProto 日志，让"是否连上 LMS"在引擎日志里可见
+    if not any(a == "-d" or (isinstance(a, str) and a.startswith("all=")) for a in argv):
+        # 已有参数页配置的 loglevel 时尊重它；否则用 all=info 覆盖调试输出
+        if not any(str(a).startswith("output=") for a in argv):
+            argv += ["-d", "all=info"]
     binary = argv[0]
     if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
         return {"ok": False,
@@ -1083,6 +1102,8 @@ def startEngine():
     except Exception as e:
         return {"ok": False, "error": "启动失败：%s" % str(e)[:200]}
     with _ENGINE_LOCK:
+        _ENGINE["manual_stop"] = False
+        _ENGINE["restarts"] = 0
         _ENGINE["proc"] = proc
         _ENGINE["pid"] = proc.pid
         _ENGINE["start_ts"] = _time.time()
@@ -1091,6 +1112,31 @@ def startEngine():
         _ENGINE["argv"] = list(argv)
     t = threading.Thread(target=_engine_reader, args=(proc,), daemon=True)
     t.start()
+    # 延迟验证：2 秒后查 LMS 是否真的看到播放器，把结果写进日志
+    def _verify():
+        import time as _t
+        _t.sleep(3)
+        if not _engine_alive():
+            _engine_log("[注册验证] 引擎进程已退出，请查看上方日志")
+            return
+        try:
+            ps = c.np_players(CFG)
+            want = ""
+            try:
+                want = c.make_player_name(CFG.get("host_name") or c.local_host_name(),
+                                          CFG.get("device_short") or "",
+                                          CFG.get("name_template") or "{host} - {short}")
+            except Exception:
+                pass
+            hit = [x for x in ps if (want and x.get("name") == want) or
+                   (x.get("name") and str(x.get("name")).lower().startswith("squeezelite"))]
+            if hit:
+                _engine_log("[注册验证] ✅ 播放器已在 LMS 上线: %s" % hit[0].get("name"))
+            else:
+                _engine_log("[注册验证] ⚠ 进程在运行，但 LMS 尚未显示播放器。检查 LMS 是否开启认证/防火墙，或等待几秒后点刷新。")
+        except Exception as e:
+            _engine_log("[注册验证] 查询失败: %s" % str(e)[:100])
+    threading.Thread(target=_verify, daemon=True).start()
     return {"ok": True, "pid": proc.pid, "command": c.preview_cmd(argv),
             "message": "squeezelite 已启动 (PID %s)，正在注册到 LMS…" % proc.pid}
 
@@ -1110,6 +1156,7 @@ def stopEngine():
     except Exception as e:
         return {"ok": False, "error": "停止失败：%s" % str(e)[:150]}
     with _ENGINE_LOCK:
+        _ENGINE["manual_stop"] = True
         _ENGINE["exit_code"] = p.poll()
         _ENGINE["logs"].append("[已停止引擎]")
     return {"ok": True, "message": "squeezelite 已停止"}
