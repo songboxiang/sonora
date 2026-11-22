@@ -5007,7 +5007,7 @@ def lib_browse(cfg, mode, start=0, count=50, query="", filters=None):
         # a=艺术家 l=专辑 j=artwork_track_id（小写 j 才返回封面标识）
         args.append("tags:alj")
     elif mode == "titles":
-        args.append("tags:alcKdtuIro")
+        args.append("tags:alcKdtuIroj")  # j=artwork_track_id，让曲目也带封面标识
     for f in (filters or []):
         if f:
             args.append(str(f))

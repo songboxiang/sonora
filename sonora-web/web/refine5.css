@@ -81,3 +81,19 @@
 
 /* 连接徽标：服务器已连但无播放器（警示色） */
 .conn-badge.noplayer{ background:rgba(245,158,11,.15) !important; color:#fbbf24 !important; border-color:rgba(245,158,11,.35) !important; }
+
+
+/* ---- mini 播放器溃缩为左下角封面小图标 ---- */
+.mini-player.folded{
+  left:12px; right:auto; width:62px; height:62px; padding:8px;
+  bottom:40px; border:1px solid var(--border); border-radius:14px;
+  box-shadow:0 6px 24px rgba(0,0,0,.28); animation:miniIn .3s cubic-bezier(.2,.8,.2,1);
+}
+.mini-player.folded .mini-cover{ width:46px; height:46px; cursor:pointer; }
+.mini-player.folded .mini-info,
+.mini-player.folded .mini-progress,
+.mini-player.folded .mini-time,
+.mini-player.folded .mini-ctrls,
+.mini-player.folded .mode-ctrls,
+.mini-player.folded .vol-ctrl,
+.mini-player.folded .mini-close{ display:none !important; }

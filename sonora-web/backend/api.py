@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.7"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.8"}
 
 
 @_wrap
@@ -166,9 +166,37 @@ def getCover(track, size=420):
 
 @_wrap
 def getLyrics(track):
-    if not isinstance(track, dict):
-        return {"text": "", "source": "", "timed": False}
-    text, src = c.np_lyrics_resolve(CFG, track, CFG.get("np_playerid", ""))
+    """取歌词：优先用传入曲目；若字段不足则用当前播放状态补全。
+    np_status(with_lyrics=True) 也会随状态带回 LMS 内嵌歌词。"""
+    full = dict(track) if isinstance(track, dict) else {}
+    pid = str(CFG.get("np_playerid") or "")
+    if not pid:
+        try:
+            pid = _pick_pid()
+        except Exception:
+            pass
+    try:
+        if pid:
+            stt = c.np_status(CFG, pid, with_lyrics=True)
+            cur = stt.get("track") or {}
+            if cur:
+                # 传入 track 为空或与当前一致时，用完整曲目字段
+                if not full.get("id") or not full.get("title") or str(cur.get("id")) == str(full.get("id")):
+                    for k in ("id", "title", "artist", "album", "duration", "url", "lyrics"):
+                        if cur.get(k) not in (None, ""):
+                            full[k] = cur.get(k)
+                # status 直接带回的歌词优先（仅当传入曲为空或与当前曲一致，避免切歌串曲）
+                _id_ok = (not full.get("id")) or (str(cur.get("id")) == str(full.get("id")))
+                if _id_ok and cur.get("lyrics") and not full.get("_embedded_lyrics"):
+                    full["_embedded_lyrics"] = cur.get("lyrics")
+    except Exception:
+        pass
+    text, src = "", ""
+    embedded = full.pop("_embedded_lyrics", "") if isinstance(full, dict) else ""
+    if embedded:
+        text, src = embedded, "LMS 内嵌"
+    if not text:
+        text, src = c.np_lyrics_resolve(CFG, full, pid)
     parsed = c.parse_lrc(text or "")
     return {"text": text or "", "source": src or "",
             "timed": bool(parsed.get("timed")),
@@ -183,21 +211,53 @@ def getBio(artist, album=""):
 
 @_wrap
 def getAudio(track):
-    if not isinstance(track, dict):
-        return {"spec": {}, "verdict": {}, "slState": {}}
-    spec = c.audio_spec(track) or {}
-    # 尝试从启动日志状态里找 squeezelite 输出信息（若进程在跑）
-    sl_lines = getattr(c, "_SL_LOG_LINES", [])[-40:]
-    st = {}
-    for line in sl_lines:
-        try:
-            st = c.parse_sl_output(line, st) or st
-        except Exception:
-            pass
-    verdict = c.audio_link_verdict(spec, st, st, True)
+    """从 LMS 当前播放状态直接取完整曲目字段解析音频规格，不依赖前端传参。
+    这样格式/码率/位深来自真实 status 标签（url/type/samplerate/samplesize/bitrate）。"""
+    # 优先用 LMS np_status 的完整 track（含 url/type/samplerate/samplesize/bitrate/filesize）
+    full = dict(track) if isinstance(track, dict) else {}
+    try:
+        pid = _pick_pid()
+        if pid:
+            stt = c.np_status(CFG, pid)
+            cur = stt.get("track") or {}
+            # 只有当前正在播放的曲目才覆盖；否则沿用前端传入
+            if cur and (not full.get("id") or str(cur.get("id")) == str(full.get("id"))):
+                for k in ("url", "type", "samplerate", "samplesize", "bitrate",
+                          "filesize", "duration", "title", "artist", "album",
+                          "artwork_track_id", "coverid", "id"):
+                    if cur.get(k) not in (None, ""):
+                        full[k] = cur.get(k)
+    except Exception:
+        pass
+    spec = c.audio_spec(full) or {}
+    # squeezelite 输出日志解析（若进程在跑）；parse_sl_output 返回 (state, bool)
+    sl_state = {}
+    try:
+        sl_lines = list(_AUDIO_STATE.get("lines", []))
+        for line in sl_lines:
+            try:
+                r = c.parse_sl_output(line, sl_state)
+                if isinstance(r, tuple):
+                    sl_state = r[0] or sl_state
+                elif isinstance(r, dict):
+                    sl_state = r
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # verdict 的 st 参数用 LMS status 的 volume/rate，sl 参数用日志解析结果
+    vst = {"volume": 100, "rate": 1}
+    try:
+        pid = _pick_pid()
+        if pid:
+            stt = c.np_status(CFG, pid)
+            vst = {"volume": stt.get("volume", 100), "rate": stt.get("rate", 1)}
+    except Exception:
+        pass
+    verdict = c.audio_link_verdict(spec, vst, sl_state, True)
     if isinstance(verdict, (tuple, list)) and len(verdict) >= 3:
         verdict = {"level": verdict[0], "title": verdict[1], "detail": verdict[2]}
-    return {"spec": spec, "verdict": verdict, "slState": st}
+    return {"spec": spec, "verdict": verdict, "slState": sl_state}
 
 
 # ---- 播放控制 ----
@@ -225,6 +285,12 @@ def playControl(cmd):
 def libBrowse(mode="albums", start=0, count=50, filters=None, query=""):
     items, total = c.lib_browse(CFG, str(mode), int(start), int(count),
                                 str(query or ""), filters or [])
+    # 与 getLibrary 一致：给条目注入缩略封面，让下钻曲目/艺术家/流派也有封面
+    for it in items:
+        cid = c.lib_cover_id(it) if hasattr(c, "lib_cover_id") else (
+            it.get("artwork_track_id") or it.get("coverid") or "")
+        it["_cover"] = _lib_thumb(cid) if cid else None
+        # 保留完整字段（含 url/type/samplerate 等），供音频信息与歌词使用
     return {"items": items, "total": total}
 
 
