@@ -58,6 +58,27 @@ def setTheme(name):
 
 # ---- 播放器 / 状态 ----
 @_wrap
+def getConnection():
+    """返回 LMS 连接状态，供顶部徽标实时显示（连通/断开/未配置）。"""
+    host = (CFG.get("lms_host") or "").strip()
+    if not host:
+        return {"connected": False, "state": "unconfigured",
+                "label": "未配置服务器", "url": ""}
+    try:
+        r = c.lms_current(CFG)
+        if r and r.get("ok"):
+            return {"connected": True, "state": "online",
+                    "label": "已连接", "url": r.get("url", ""),
+                    "version": r.get("version", "")}
+        return {"connected": False, "state": "offline",
+                "label": "连接失败", "url": (r or {}).get("url", ""),
+                "error": (r or {}).get("error", "")}
+    except Exception as e:
+        return {"connected": False, "state": "offline",
+                "label": "连接失败", "error": str(e)[:120]}
+
+
+@_wrap
 def getPlayers():
     ps = c.np_players(CFG)
     return [{"id": str(p.get("id", "")), "name": str(p.get("name", "")),
@@ -274,16 +295,47 @@ def saveServer(host, port="9000", user="", password="", playerId=""):
 @_wrap
 def scanDevices():
     devs, reasons, binary = c.scan_devices(CFG)
+    # 兜底：若扫描结果为空或只有一个笼统项，补充 LMS 端已连接的播放器
+    try:
+        ps = c.np_players(CFG)
+        known = {d["name"].lower() for d in devs}
+        for p in ps:
+            if p.get("connected") and p.get("name"):
+                nm = str(p["name"])
+                if nm.lower() not in known:
+                    devs.append({"id": "", "name": nm, "raw": nm,
+                                 "source": "lms", "is_default": False,
+                                 "playerid": str(p.get("id", ""))})
+                    known.add(nm.lower())
+    except Exception:
+        pass
+    # 再兜底：macOS 常见默认设备占位，保证界面至少可选项
+    if not devs:
+        devs = [{"id": "", "name": "系统默认输出 (default)", "raw": "default",
+                 "source": "fallback", "is_default": True}]
+        reasons.append("未扫描到具体设备，已提供默认输出项；可在上方填写设备名")
     return {"devices": devs, "reasons": reasons, "binary": binary or ""}
 
 
 @_wrap
-def saveDevice(device="", deviceName="", deviceShort=""):
+def saveDevice(device="", deviceName="", deviceShort="", hostName=None, nameTemplate=None):
     CFG["device"] = str(device or "")
     CFG["device_name"] = str(deviceName or "")
     CFG["device_short"] = str(deviceShort or "")
+    if hostName is not None:
+        CFG["host_name"] = str(hostName or "").strip()
+    if nameTemplate is not None:
+        CFG["name_template"] = str(nameTemplate or "").strip() or "{host} - {short}"
     c.save_config(CFG)
-    return {"ok": True}
+    # 计算最终在 LMS 显示的播放器名，便于前端回显
+    try:
+        nm = c.make_player_name(
+            CFG.get("host_name") or c.local_host_name(),
+            CFG.get("device_short") or "",
+            CFG.get("name_template") or "{host} - {short}")
+    except Exception:
+        nm = ""
+    return {"ok": True, "playerName": nm}
 
 
 @_wrap
@@ -299,6 +351,29 @@ def getParams():
             "preview": c.preview_cmd(argv),
             "problems": c.validate_all(values, extra),
             "binary": c.find_binary(CFG) or ""}
+
+
+@_wrap
+def applyBestParams():
+    """一键应用最优音质（bit-perfect）方案：每个参数取 recommend，
+    但保留由设备/名称/LMS 页维护的联动项（output/name/server）。"""
+    linked = {"output", "name", "server"}
+    applied = {}
+    for pdef in c.PARAMS:
+        k = pdef.get("key")
+        if not k or k in linked:
+            continue
+        rec = pdef.get("recommend", "")
+        applied[k] = rec
+    # 合并进现有 params（只覆盖非联动项）
+    params = dict(CFG.get("params") or {})
+    params.update(applied)
+    CFG["params"] = params
+    c.save_config(CFG)
+    argv = c.build_argv(CFG, params)
+    return {"ok": True, "applied": applied,
+            "preview": c.preview_cmd(argv),
+            "problems": c.validate_all(params, CFG.get("extra", ""))}
 
 
 @_wrap
@@ -741,6 +816,27 @@ def setVolume(value):
     return {"ok": True, "volume": v}
 
 
+_PREV_VOLUME = {"value": None}
+
+
+@_wrap
+def toggleMute():
+    """一键静音/恢复：静音时记住当前音量并设为 0；恢复时还原。"""
+    pid = _pick_pid()
+    if not pid:
+        return {"ok": False, "error": "no player"}
+    st = c.np_status(CFG, pid)
+    cur = int(st.get("volume", 0) or 0)
+    if cur > 0:
+        _PREV_VOLUME["value"] = cur
+        c.lms_rpc(CFG, ["mixer", "volume", "0"], pid, _id=108)
+        return {"ok": True, "muted": True, "volume": 0}
+    # 当前为 0：恢复
+    restore = _PREV_VOLUME["value"] or 60
+    c.lms_rpc(CFG, ["mixer", "volume", str(restore)], pid, _id=109)
+    return {"ok": True, "muted": False, "volume": restore}
+
+
 @_wrap
 def setSeek(seconds):
     pid = _pick_pid()
@@ -751,6 +847,9 @@ def setSeek(seconds):
 
 
 class BridgeAPI:
+    def getConnection(self): return getConnection()
+    def applyBestParams(self): return applyBestParams()
+    def toggleMute(self): return toggleMute()
     def getMeta(self): return getMeta()
     def getConfig(self): return getConfig()
     def setTheme(self, name): return setTheme(name)
@@ -769,7 +868,7 @@ class BridgeAPI:
     def testServer(self, host="", port="9000", user="", password=""): return testServer(host, port, user, password)
     def saveServer(self, host, port="9000", user="", password="", playerId=""): return saveServer(host, port, user, password, playerId)
     def scanDevices(self): return scanDevices()
-    def saveDevice(self, device="", deviceName="", deviceShort=""): return saveDevice(device, deviceName, deviceShort)
+    def saveDevice(self, device="", deviceName="", deviceShort="", hostName=None, nameTemplate=None): return saveDevice(device, deviceName, deviceShort, hostName, nameTemplate)
     def getParams(self): return getParams()
     def saveParams(self, values=None, extra=""): return saveParams(values, extra)
     def getLaunchInfo(self): return getLaunchInfo()

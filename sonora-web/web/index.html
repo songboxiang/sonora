@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="refine2.css">
 <link rel="stylesheet" href="refine3.css">
 <link rel="stylesheet" href="refine4.css">
+    <link rel="stylesheet" href="refine5.css">
 </head>
 <body>
 <div class="app">
@@ -19,7 +20,7 @@
       <img class="brand-logo" src="assets/logo-mark.svg" alt="">
       <span class="brand-zh">Sonora <em>颂诺</em></span>
     </span>
-    <span class="brand-sub" id="connText">未连接</span>
+    <span class="brand-sub conn-badge" id="connText">未连接</span>
     <span class="spacer"></span>
     <button class="icon-btn settings-btn" id="settingsBtn" title="设置" aria-label="设置">
       <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M19.14 12.94a7.5 7.5 0 0 0 .05-.94 7.5 7.5 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7.3 7.3 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.73 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96a7.3 7.3 0 0 0 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7.3 7.3 0 0 0 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2Z"/></svg>
@@ -166,6 +167,16 @@
             <button class="btn" id="devScan">重新扫描</button></div>
           <div class="device-list" id="deviceList"><div class="empty-mini">点击「重新扫描」检测设备</div></div>
         </div>
+        <div class="card" id="deviceNameCard">
+          <div><b>播放器命名</b><div class="hint">LMS 服务端「播放器」列表中显示的名称；随所选设备自动生成</div></div>
+          <div class="name-fields">
+            <label>本机名称<input type="text" id="devHostName" placeholder="自动检测"></label>
+            <label>设备简称<input type="text" id="devShort" placeholder="留空自动生成"></label>
+            <label>名称模板<input type="text" id="devTemplate" value="{host} - {short}" placeholder="{host} - {short}"></label>
+          </div>
+          <div class="name-preview">LMS 显示名：<code id="devNamePreview">—</code></div>
+          <button class="btn primary" id="devNameSave">保存命名</button>
+        </div>
         <div class="card" id="syncCard">
           <div class="row-between"><div><b>多端同播</b><div class="hint">将多台 LMS 播放器组成同步组，一起播放同一首音乐</div></div>
             <button class="btn" id="syncRefresh">刷新设备</button></div>
@@ -202,7 +213,9 @@
         <div class="settings-head"><h2>参数配置</h2><p class="muted">squeezelite 启动参数，修改后实时预览命令</p></div>
         <div class="card">
           <div class="param-toolbar"><div class="param-cats" id="paramCats"></div>
-            <span class="spacer"></span><button class="btn primary" id="paramSave">保存参数</button></div>
+            <span class="spacer"></span>
+            <button class="btn" id="paramBest" title="一键套用 bit-perfect 最优音质配置">★ 一键最优</button>
+            <button class="btn primary" id="paramSave">保存参数</button></div>
           <div class="param-list" id="paramList"><div class="empty-mini">加载参数中…</div></div>
         </div>
         <div class="card">
@@ -255,6 +268,9 @@
 
   <!-- ============ mini 播放器（底部常驻）============ -->
   <div class="mini-player" id="miniPlayer" hidden>
+    <button class="mini-close" id="miniClose" title="关闭迷你播放器" aria-label="关闭">
+      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M18.3 5.71 12 12.01l-6.3-6.3-1.41 1.41 6.3 6.3-6.3 6.3 1.41 1.41 6.3-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.3z"/></svg>
+    </button>
     <div class="mini-cover" id="miniCover"><span class="ph">♪</span></div>
     <div class="mini-info">
       <div class="mini-title" id="miniTitle">—</div>
@@ -273,7 +289,12 @@
       <button data-mode="one" title="单曲循环">⟳<small>1</small></button>
       <button data-mode="shuffle" title="随机播放">⤨</button>
     </div>
-    <div class="vol-ctrl"><span>🔊</span><input type="range" id="volSlider" min="0" max="100" value="60" title="音量"></div>
+    <div class="vol-ctrl">
+      <button class="mute-btn" id="miniMute" title="静音/恢复" aria-label="静音">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4.03v8.05A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
+      </button>
+      <input type="range" id="volSlider" min="0" max="100" value="60" title="音量">
+    </div>
   </div>
 
   <!-- ============ 常规播放器（点击封面进入）============ -->
@@ -322,7 +343,11 @@
             <button data-mode="one" title="单曲循环">⟳<small>1</small></button>
             <button data-mode="shuffle" title="随机播放">⤨</button>
           </div>
-          <label class="p-vol">🔊 <input type="range" id="pVolSlider" min="0" max="100" value="60" title="音量"></label>
+          <label class="p-vol">
+            <button class="mute-btn" id="pMute" title="静音/恢复" aria-label="静音">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4.03v8.05A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
+            </button>
+            <input type="range" id="pVolSlider" min="0" max="100" value="60" title="音量"></label>
         </div>
         <div class="panel-toggles" id="panelToggles">
           <button data-panel="playlist" class="on">▤ 播放列表</button>

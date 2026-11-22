@@ -336,6 +336,22 @@
 
   /* ---------- mini 播放器 ---------- */
   $("miniCover").addEventListener("click",openPlayer);
+  if($("miniClose")) $("miniClose").addEventListener("click",e=>{
+    e.stopPropagation(); $("miniPlayer").hidden=true;
+    toast("已关闭迷你播放器 · 切歌时会再次出现");
+  });
+  async function doMute(){
+    const r=await apiCall("toggleMute",{ok:true,muted:false,volume:S.volume});
+    if(r&&r.ok===false){ toast("静音操作失败"); return; }
+    if(r&&typeof r.volume==="number"){
+      S.volume=r.volume;
+      document.querySelectorAll('#volSlider,#pVolSlider').forEach(x=>x.value=r.volume);
+    }
+    document.querySelectorAll('#miniMute,#pMute').forEach(b=>b.classList.toggle("muted", !!(r&&r.muted)));
+    toast(r&&r.muted?"已静音":"已恢复音量");
+  }
+  if($("miniMute")) $("miniMute").addEventListener("click",e=>{e.stopPropagation();doMute();});
+  if($("pMute")) $("pMute").addEventListener("click",e=>{e.stopPropagation();doMute();});
   async function doPlayControl(cmd){
     const r=await apiCall("playControl",{ok:true},cmd);
     if(r&&r.ok===false){ toast("控制失败："+(r.error||"播放器不在线")); return; }
@@ -466,6 +482,14 @@
     }
     const scan=await apiCall("scanDevices", window.__DEVICES__||{devices:[],reasons:[],binary:""});
     renderDevices(scan);
+    // 填入命名现值
+    const cfg=await apiCall("getConfig",CFG2);
+    if(cfg){
+      if($("devHostName")) $("devHostName").value=cfg.host_name||"";
+      if($("devShort")) $("devShort").value=cfg.device_short||"";
+      if($("devTemplate")) $("devTemplate").value=cfg.name_template||"{host} - {short}";
+      refreshDevNamePreview();
+    }
     loadSync();
   }
   function renderDevices(scan){
@@ -493,6 +517,30 @@
     const scan=await apiCall("scanDevices", window.__DEVICES__||{devices:[],reasons:[],binary:""});
     renderDevices(scan); toast("设备扫描完成");
   });
+  // 设备命名：填入现值 + 预览 + 保存
+  function refreshDevNamePreview(){
+    const host=($("devHostName")&&$("devHostName").value.trim())||"本机";
+    const short=($("devShort")&&$("devShort").value.trim())||"";
+    const tpl=($("devTemplate")&&$("devTemplate").value.trim())||"{host} - {short}";
+    let name=tpl.replace(/\{host\}/g,host).replace(/\{short\}/g,short);
+    if(!short) name=name.replace(/\s*-\s*$/,"");
+    if($("devNamePreview")) $("devNamePreview").textContent=name||"—";
+  }
+  ["devHostName","devShort","devTemplate"].forEach(id=>{
+    const el=$(id); if(el) el.addEventListener("input",refreshDevNamePreview);
+  });
+  if($("devNameSave")) $("devNameSave").addEventListener("click",async()=>{
+    const host=($("devHostName")&&$("devHostName").value.trim())||"";
+    const short=($("devShort")&&$("devShort").value.trim())||"";
+    const tpl=($("devTemplate")&&$("devTemplate").value.trim())||"{host} - {short}";
+    const sel=$("deviceList")&&$("deviceList").querySelector(".device-row.sel");
+    const devId=sel?sel.dataset.id:"";
+    const r=await apiCall("saveDevice",{ok:true},devId,host,short,host,tpl);
+    // 名称模板/本机名也写入配置（若后端支持）
+    if(r&&r.ok!==false) toast("播放器命名已保存");
+    else toast("保存失败");
+  });
+
   if($("engineToggle")) $("engineToggle").addEventListener("click",()=>{
     const on=$("engineState").textContent.indexOf("运行中")<0;
     $("engineState").textContent=on?"引擎运行中":"引擎未运行";
@@ -601,18 +649,53 @@
     paramValues=Object.assign({},paramData.values||{});
     box.innerHTML=defs.length? defs.map(p=>{
       const k=p.key, v=paramValues[k]!=null?paramValues[k]:(p.default||"");
-      let ctrl;
-      if(p.choices&&p.choices.length){
-        ctrl=`<select data-k="${esc(k)}">${p.choices.map(c=>`<option value="${esc(c)}" ${String(c)===String(v)?"selected":""}>${esc(c)}</option>`).join("")}</select>`;
+      // 后端 PARAMS 用 options=[(值,显示名,效果),...]；兼容 choices
+      const opts=p.options||p.choices||[];
+      let ctrl="";
+      if(opts.length && typeof opts[0]==="string"){
+        ctrl=`<select data-k="${esc(k)}">${opts.map(c=>`<option value="${esc(c)}" ${String(c)===String(v)?"selected":""}>${esc(c)}</option>`).join("")}</select>`;
+      } else if(opts.length && Array.isArray(opts[0])){
+        ctrl=`<select data-k="${esc(k)}">${opts.map(o=>{
+          const val=o[0], label=o[1]||o[0];
+          return `<option value="${esc(val)}" ${String(val)===String(v)?"selected":""}>${esc(label)}</option>`;
+        }).join("")}</select>`;
       } else if(p.kind==="bool"){
         ctrl=`<select data-k="${esc(k)}"><option value="" ${!v?"selected":""}>关闭</option><option value="1" ${v?"selected":""}>启用</option></select>`;
       } else {
         ctrl=`<input type="text" data-k="${esc(k)}" value="${esc(v)}" placeholder="${esc(p.default||"")}">`;
       }
-      return `<div class="param-item"><label>${esc(p.name)} <em>${esc(p.flag)}</em></label>${ctrl}</div>`;
+      // 选中项的「具体效果」说明
+      let eff="";
+      if(opts.length && Array.isArray(opts[0])){
+        const hit=opts.find(o=>String(o[0])===String(v));
+        if(hit && hit[2]) eff=String(hit[2]);
+      }
+      if(!eff && p.effect) eff=p.effect;
+      const rec=p.recommend!=null&&p.recommend!==""?String(p.recommend):"";
+      const recTag=rec?`<span class="param-rec" title="最优音质推荐值">★ 推荐 ${esc(rec||"留空")}</span>`:"";
+      const detail=p.detail?`<div class="param-detail">${esc(p.detail)}</div>`:"";
+      const effect=eff?`<div class="param-effect">${esc(eff)}</div>`:"";
+      const range=p.range?`<div class="param-range">取值范围：${esc(p.range)}</div>`:"";
+      const help=(effect||detail||range)?`<div class="param-help">${effect}${detail}${range}</div>`:"";
+      return `<div class="param-item">
+        <div class="param-head"><label>${esc(p.name)} <em>${esc(p.flag)}</em></label>${recTag}</div>
+        <div class="param-ctrl">${ctrl}</div>
+        ${help}
+      </div>`;
     }).join(""):'<div class="empty-mini">该分类暂无参数</div>';
     box.querySelectorAll("input,select").forEach(el=>el.addEventListener("change",()=>{
       paramValues[el.dataset.k]=el.value; updateParamPreview();
+      // 切换选项后刷新该项的说明文字
+      const item=el.closest(".param-item");
+      const def=defs.find(x=>x.key===el.dataset.k);
+      if(item&&def){
+        const opts=def.options||def.choices||[];
+        if(opts.length&&Array.isArray(opts[0])){
+          const hit=opts.find(o=>String(o[0])===String(el.value));
+          const eff=item.querySelector(".param-effect");
+          if(eff&&hit&&hit[2]) eff.textContent=String(hit[2]);
+        }
+      }
     }));
     if($("paramPreview")) $("paramPreview").textContent=paramData.preview||"—";
     const probs=paramData.problems||[];
@@ -634,6 +717,13 @@
   if($("paramSave")) $("paramSave").addEventListener("click",async()=>{
     const r=await apiCall("saveParams",{ok:true,preview:"squeezelite"},paramValues,"");
     toast(r&&r.ok!==false?"参数已保存":"参数校验未通过");
+  });
+  if($("paramBest")) $("paramBest").addEventListener("click",async()=>{
+    if(!confirm("应用最优音质方案（bit-perfect）？\n将把各参数设为推荐值，并保留你已选的输出设备、播放器名称与 LMS 服务器。"))return;
+    const r=await apiCall("applyBestParams",{ok:true,applied:{},preview:"squeezelite"});
+    if(r&&r.ok===false){ toast("应用失败："+(r.error||"")); return; }
+    toast("已应用最优音质方案 ★");
+    await loadParamsPage();
   });
 
   // ---- 升级与更新 ----
@@ -1138,6 +1228,16 @@
   }
   bindVol("volSlider"); bindVol("pVolSlider");
 
+  // ---- LMS 连接状态徽标（顶部实时显示）----
+  async function updateConnBadge(){
+    const el=$("connText"); if(!el)return;
+    const r=await apiCall("getConnection",{connected:true,state:"online",label:"已连接"});
+    if(!r)return;
+    el.textContent=r.label||"未连接";
+    el.className="brand-sub conn-badge "+(r.state||"offline");
+    el.title=r.error||r.url||"";
+  }
+
   // ---- 真实状态轮询 ----
   async function pollStatus(){
     const st=await apiCall("getStatus",null);
@@ -1167,6 +1267,8 @@
       document.querySelectorAll(".mode-ctrls").forEach(box=>box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.mode===mode))); }
     updateTimeUI();
     loadQueue();
+    pollStatus._n=(pollStatus._n||0)+1;
+    if(pollStatus._n%5===1) updateConnBadge();
   }
 
   /* ---------- 初始化 ---------- */
@@ -1174,7 +1276,7 @@
     for(let i=0;i<30 && !api.getMeta;i++){ await new Promise(r=>setTimeout(r,100));
       api=(window.pywebview&&window.pywebview.api)||window.api||{}; }
     if(api.getMeta){
-      try{ const meta=await api.getMeta(); $("footVer").textContent="Sonora 颂诺 · Web v0.2.0 / Core v"+meta.version;
+      try{ const meta=await api.getMeta(); $("footVer").textContent="Sonora 颂诺 · Web v2.0.0 / Core v"+meta.version;
         $("helpMeta").textContent="Sonora 颂诺 · 核心逻辑 v"+meta.version+" · pywebview 渲染层 v0.2.0"; }catch(e){}
     }
     // 载入数据：优先 bridge，其次注入的快照
@@ -1203,6 +1305,7 @@
     // 增强功能初始化
     loadPlaylists(); loadQueue(); loadFavorites();
     setTimeout(pollStatus, 300);
+    setTimeout(updateConnBadge, 500);
     setInterval(pollStatus, 2000);
   }
   window.addEventListener("DOMContentLoaded",init);

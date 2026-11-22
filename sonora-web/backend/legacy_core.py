@@ -995,16 +995,34 @@ def lms_base(cfg):
     return base.rstrip("/")
 
 def lms_rpc(cfg, cmd, playerid="", timeout=6, _id=1):
+    """向 LMS 发 JSON-RPC。对瞬时断连（Remote end closed / reset / timeout）
+    做 2 次重试——pywebview/WKWebView 环境下偶发 keep-alive 连接被服务端关闭。"""
     url = lms_base(cfg) + "/jsonrpc.js"
     payload = json.dumps({"id": _id, "method": "slim.request",
                           "params": [playerid or "", list(cmd)]}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     headers.update(lms_auth_headers(cfg))
-    raw = http_request(url, data=payload, headers=headers, timeout=timeout)
-    d = json.loads(raw.decode("utf-8", "replace"))
-    if "error" in d:
-        raise RuntimeError("LMS 返回错误: %s" % str(d["error"])[:120])
-    return d.get("result", {}) or {}
+    last = None
+    for attempt in range(3):
+        try:
+            raw = http_request(url, data=payload, headers=headers,
+                               timeout=timeout)
+            d = json.loads(raw.decode("utf-8", "replace"))
+            if "error" in d:
+                raise RuntimeError("LMS 返回错误: %s" % str(d["error"])[:120])
+            return d.get("result", {}) or {}
+        except Exception as e:
+            last = e
+            msg = str(e)
+            transient = ("Remote end closed" in msg or "reset by peer" in msg
+                         or "timed out" in msg.lower() or "BrokenPipe" in msg
+                         or "Connection aborted" in msg or "EOF" in msg)
+            if transient and attempt < 2:
+                import time as _t
+                _t.sleep(0.25 * (attempt + 1))
+                continue
+            raise
+    raise last
 
 def np_players(cfg):
     r = lms_rpc(cfg, ["serverstatus", 0, 999], _id=11)

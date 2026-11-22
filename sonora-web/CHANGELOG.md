@@ -4,6 +4,28 @@
 `CHANGELOG.md`。发布时同步更新 `main.py` 的 `VERSION` 与 `backend/api.py`
 的 bridge 标记，并打附注标签 `vX.Y.Z`。
 
+## v2.0.1 (2026-11-22) — 真实环境测试 7 项问题修复
+
+基于 macOS 真机手动测试反馈，修复 7 项问题：
+
+1. **音量图标风格与静音**：emoji 🔊 换成与 UI 一致的 SVG 扬声器图标；
+   音量控件新增一键静音/恢复按钮（后端记住静音前音量）。
+2. **设备扫描**：无 squeezelite 时用 LMS 在线播放器 + 默认输出兜底，
+   保证界面始终有可选项；coreaudio_device 等扫描结果正常显示。
+3. **播放器命名**：设备页新增「本机名称 / 设备简称 / 名称模板」输入框，
+   实时预览 LMS 显示名并保存到配置；saveDevice 扩展支持 host_name / name_template。
+4. **参数页一键最优与帮助**：修复前端字段错误（options 而非 choices），
+   渲染每个参数的下拉显示名、具体效果、详细说明、推荐值与取值范围；
+   新增「★ 一键最优」按钮（后端 applyBestParams，保留设备/名称/LMS 联动项）。
+5. **mini 播放器关闭**：新增关闭按钮（悬停显示），关闭后切歌会再次出现，
+   不再遮挡后方内容。
+6. **连接状态**：顶部徽标新增 getConnection API 实时轮询，正确显示
+   「已连接 / 连接失败 / 未配置」（此前写死「未连接」）。
+7. **播放下发与封面**：LMS JSON-RPC 增加瞬时断连重试（Remote end closed
+   connection / reset / timeout 自动重试 2 次），修复点歌下发失败。
+
+其他：Bridge API 45 → 48；版本号统一 2.0.1；新增 refine5.css 独立样式层。
+
 ## v2.0.0 (2026-11-22) — 大版本：pywebview 渲染层重构 + 完整交互
 
 相对 Tk 版 v1.6.0 的大版本升级：渲染层从 Tk 换成 HTML/CSS（pywebview 6.x

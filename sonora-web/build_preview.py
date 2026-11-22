@@ -78,15 +78,41 @@ window.__QUEUE_ITEMS__ = [
   {id:'t4',title:'玫瑰色的人生',artist:'李荣浩',album:'模特'},
   {id:'t5',title:'海边',artist:'张惠妹',album:'你在看我吗'}
 ];
+window.__CFG__ = {theme:'dark', lms_host:'192.168.199.2', lms_port:'9000',
+  host_name:'Song-Mac', device_short:'USBDAC', name_template:'{host} - {short}',
+  device:'coreaudio_device', lms_user:'', np_playerid:''};
+window.__DEVICES__ = {binary:'/opt/homebrew/bin/squeezelite', reasons:[], devices:[
+  {id:'',name:'BuiltIn Output',raw:'BuiltIn',source:'squeezelite -l',is_default:true},
+  {id:'',name:'USBDAC',raw:'USBDAC',source:'squeezelite -l',is_default:false},
+  {id:'',name:'coreaudio_device',raw:'coreaudio_device',source:'system_profiler',is_default:false}
+]};
+window.__PARAMS__ = {binary:'/opt/homebrew/bin/squeezelite',
+  preview:'squeezelite -a 100:0 -r 44100-384000 -b 8192:8192',
+  problems:[], values:{'device_args':'100:0','rates':'44100-384000','buffer':'8192:8192'},
+  params:[
+    {key:'server',flag:'-s',name:'LMS 服务器',kind:'text',default:'',recommend:'',
+     options:[['','自动发现（不传 -s）','通过 UDP 广播自动发现同网段 LMS']],
+     effect:'决定播放器连接哪台 LMS。',detail:'格式 host[:port]。',range:'IP [ :端口 ]'},
+    {key:'device_args',flag:'-a',name:'设备打开参数 (-a)',kind:'text',default:'',recommend:'100:0',
+     options:[['','默认','交给驱动'],['100:0','★ Pro Mode 独占 + 100ms（最优音质）','绕过系统混音与 SRC，实现 bit-perfect'],['100:1','Play Nice 共享','系统会重采样，音质有损']],
+     effect:'macOS 上最影响音质的参数。',detail:'Pro Mode 独占设备，DAC 收到源码流原始采样率。',range:'<延迟ms>:<0|1>'},
+    {key:'rates',flag:'-r',name:'采样率 (-r)',kind:'text',default:'',recommend:'44100-384000',
+     options:[['','不指定','自动探测'],['44100-384000','★ 44.1k~384k 全范围（最优音质）','避免服务端重采样'],['44100-192000','44.1k~192k','主流 USB DAC']],
+     effect:'声明设备支持的采样率。',detail:'这是实现 bit-perfect 的关键参数。',range:'单值 / 范围 / 列表'},
+    {key:'buffer',flag:'-b',name:'缓冲 (-b)',kind:'text',default:'',recommend:'8192:8192',
+     options:[['','默认','系统决定'],['8192:8192','★ 大缓冲（最优音质）','抗网络抖动，不改音质']],
+     effect:'设置输入输出缓冲大小。',detail:'大缓冲抗抖动。',range:'<stream>:<output> KB'}
+  ]};
+window.__LAUNCH__ = {binary:'/opt/homebrew/bin/squeezelite', command:'squeezelite -a 100:0 -r 44100-384000', version:'2.0.0', autoRun:true, problems:[]};
 window.__FAV_IDS__ = ['t1','t3'];
 window.__QUEUE__ = {items:window.__QUEUE_ITEMS__,index:0,mode:'0 0',ok:true};
 window.__DRILL__ = {};
-window.__UPDATES__ = {local:'v2.0.0', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
+window.__UPDATES__ = {local:'v2.0.1', squeezelite:{arch:'m1',items:[],latest:{version:'v0.2.1'}}, lms:{}, errors:[]};
 window.__CHANGELOG__ = {items:[],source:'preview'};
 (function(){
   const base = {
     getMeta:()=>Promise.resolve({version:'1.6.0'}),
-    getConfig:()=>Promise.resolve({theme:'dark'}),
+    getConfig:()=>Promise.resolve(window.__CFG__),
     getLibrary:()=>Promise.resolve(window.__LIB__),
     getAudio:()=>Promise.resolve(window.__AUDIO__),
     getLyrics:()=>Promise.resolve(window.__LYRICS__),
@@ -141,6 +167,13 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     queueRemove:()=>Promise.resolve({ok:true}),
     queuePlayIndex:()=>Promise.resolve({ok:true}),
     setPlayMode:(sh,rp)=>Promise.resolve({ok:true}),
+    getConnection:()=>Promise.resolve({connected:true,state:'online',label:'已连接',url:'http://192.168.199.2:9000',version:'9.1.1'}),
+    scanDevices:()=>Promise.resolve(window.__DEVICES__),
+    saveDevice:(dev,host,short)=>{ window.__CFG__.device=dev; window.__CFG__.host_name=host; window.__CFG__.device_short=short; return Promise.resolve({ok:true,playerName:(host||'Mac')+' - '+(short||'')}); },
+    getParams:()=>Promise.resolve(window.__PARAMS__),
+    applyBestParams:()=>{ window.__PARAMS__.values={'device_args':'100:0','rates':'44100-384000','buffer':'8192:8192'}; return Promise.resolve({ok:true,applied:window.__PARAMS__.values,preview:window.__PARAMS__.preview}); },
+    toggleMute:()=>{ window.__MUTED__=!window.__MUTED__; return Promise.resolve({ok:true,muted:window.__MUTED__,volume:window.__MUTED__?0:60}); },
+    getLaunchInfo:()=>Promise.resolve(window.__LAUNCH__),
     setVolume:(v)=>Promise.resolve({ok:true}),
     getCover:()=>Promise.resolve(window.__COVER__)
   };
