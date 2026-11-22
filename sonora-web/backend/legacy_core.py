@@ -48,8 +48,34 @@ import urllib.parse
 import urllib.error
 from datetime import datetime
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
+# --- Web 版兼容：tkinter 为可选依赖 -------------------------------------
+# 本文件是 Tk 版单文件原样复用；Web(pywebview)版只调用前段的纯函数，
+# 不实例化 class App。无 Tk 的 Python（如 homebrew）在此处会 ImportError，
+# 故用轻量 stub 占位，保证纯函数可导入；若真去实例化 App 会给出明确提示。
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
+    _HAS_TK = True
+except Exception:                       # noqa: BLE001 - 缺 Tk 是预期降级
+    _HAS_TK = False
+    class _NoTk:
+        """仅占位：使 class App(tk.Tk) / @ttk.Style 等定义期语句可通过。"""
+        TkVersion = 0
+        def __getattr__(self, _name):
+            return _NoTk()
+        def __call__(self, *_a, **_kw):
+            return _NoTk()
+    tk = _NoTk()
+    ttk = messagebox = filedialog = scrolledtext = tkfont = _NoTk()
+
+    class _AppMissingTk:
+        def __init__(self, *_a, **_kw):
+            raise RuntimeError(
+                "Tk GUI 不可用：当前 Python 缺少 tkinter。Web 版无需 tkinter，"
+                "请通过 main.py 启动；如需 Tk 版请使用带 Tk 的 Python。")
+    _AppBase = _AppMissingTk
+else:
+    _AppBase = tk.Tk
 
 VERSION = "1.6.0"
 APP_NAME = "Squeezelite GUI"
@@ -1453,7 +1479,7 @@ for _p in PARAMS:
         GROUPS.append(_p["group"])
 
 
-class App(tk.Tk):
+class App(_AppBase):
     """Squeezelite GUI 主窗口。全部耗时操作放后台线程，通过 Queue + after() 回主线程刷新。"""
 
     def __init__(self):
