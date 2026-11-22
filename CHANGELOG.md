@@ -3,6 +3,35 @@
 本项目遵循语义化版本：发布时同步更新 `squeezelite_gui.py` 中的 `VERSION`
 常量，并打附注标签 `vX.Y.Z`。
 
+## v1.5.1 (2026-11-22) — 修正 MAI 插件命令，真正从 LMS 接收简介与歌词
+
+- **问题定位**：真实 LMS 9.1.1 抽样发现服务端**已安装** Music & Artist
+  Information 插件，`musicartistinfo biography` / `lyrics` 均能正常返回数据；
+  此前 APP 误用 `artistinfo` / `albuminfo` 这两个不存在的命令，LMS 不认识
+  会直接 `RemoteDisconnected`，被误判为「未安装插件」，于是简介一直走
+  维基百科、歌词一直走公网在线源。
+- **命令修正**：新增 `mai_rpc()` 统一封装 `musicartistinfo` CLI，按官方
+  `CLI.md` 使用 `biography artist:<name>`、`albumreview artist:<a> album:<b>`、
+  `lyrics track_id:<id>`（依次回退 `url:` / `artist:+title:`）。
+  `_MAI_STATE` 缓存探测结果：插件未安装导致断连后不再重复请求。
+- **长文本清洗**：`_mai_text()` 去除 MAI 返回的 HTML 标签 / 实体、压缩空白，
+  避免简介里出现标签碎片。
+- **简介默认走 LMS**：`bio_fetch()` 歌手简介 / 专辑评论优先 MAI，任一未命中
+  自动回退维基百科中 / 英文 API；`bio_lms_plugin` 由「默认关闭的开关」改为
+  「默认启用、设为 `false` 才彻底跳过」。来源标注改为
+  「LMS · Music & Artist Information」。
+- **歌词接入 LMS**：新增 `lms_mai_lyrics()`，`np_lyrics_resolve()` 优先级改为
+  `songinfo tags:w` → MAI `lyrics` → 在线 LRCLIB / 网易云 → 手动 LRC。
+  实测 MAI 歌词为**纯文本无时间轴**，因此默认仍让带 `[mm:ss.xx]` 的在线
+  LRC 优先以保留逐行高亮，MAI 作为不走公网的兜底；配置
+  `lyrics_prefer_lms: true` 可强制完全从 LMS 取（会失去逐行高亮）。
+- **降级保证**：插件未安装、命令不存在、LMS 断连、返回 `error` 时一律静默
+  降级，主流程不受影响；不引入任何新依赖。
+- 新增 `docs/LMS_PLUGINS.md`（插件清单 / 安装步骤 / CLI 命令 / 验证方法）与
+  `docs/UI_DESIGN_BRIEF.md`（交给设计类模型的 UI 规范与交付物清单）。
+- 文档：README、应用内 HELP_TEXT、视图来源标签同步更新，清除旧
+  `artistinfo` / `albuminfo` 与「需手动添加第三方仓库」的过时描述。
+
 ## v1.5.0 (2026-11-22) — 音频链路直通判定、简介视图、专注大屏与 UI 收敛
 
 - **修复「下一曲」被挤出画面**：正在播放页左卡片的播放控制区由 `pack`

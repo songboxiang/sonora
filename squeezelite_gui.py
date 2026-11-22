@@ -18,7 +18,8 @@ Squeezelite GUI  --  macOS 图形化配置 / 启动 / 升级工具
   - 参数说明：官方 manpage https://ralph-irving.github.io/squeezelite.html (2025-10-10)
   - LMS 版本库：https://lyrion.org/lms-server-repository/servers.json
   - LMS 当前版本：JSON-RPC  POST /jsonrpc.js  {"params":[0,["version","?"]]}
-  - 正在播放：JSON-RPC serverstatus / status / songinfo(tags:w) / artwork
+  - 正在播放：JSON-RPC serverstatus / status / songinfo(tags:w) / artwork /
+    musicartistinfo（Music & Artist Information 插件，v1.5.1 起）
   - Squeezelite 二进制：https://sourceforge.net/projects/lmsclients/files/squeezelite/osx/{m1,intel}/
   - 升级内容：GitHub Atom commits（api.github.com 不可用时自动降级）
 
@@ -50,7 +51,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, font as tkfont
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 APP_NAME = "Squeezelite GUI"
 UA = "SqueezeliteGUI/1.0 (macOS; Python; +https://lyrion.org/)"
 
@@ -3445,7 +3446,7 @@ class App(tk.Tk):
                 self.np_src_lbl.configure(text="专辑详情 · 由 LMS 标签提供")
             else:
                 self.np_src_lbl.configure(
-                    text="歌手 / 专辑简介 · LMS 标签 + 维基百科")
+                    text="歌手 / 专辑简介 · LMS（MAI）+ 维基百科兜底")
         except Exception:
             pass
         if self.np_view == "bio":
@@ -3598,8 +3599,8 @@ class App(tk.Tk):
             t.insert("end", ("  ·  ".join(meta) if meta else
                              "（LMS 未返回更多标签）") + "\n\n", "b")
             t.insert("end", "简介来源：%s\n" % (src or "—"), "m")
-            t.insert("end", "LMS 未安装 Music & Artist Information 插件时，"
-                            "长篇简介取自维基百科；专辑信息始终由 LMS 标签提供。\n"
+            t.insert("end", "歌手简介优先取自 LMS 的 Music & Artist Information 插件，"
+                            "未命中时回退维基百科；专辑信息始终由 LMS 标签提供。\n"
                             "本 APP 不做真实 FFT：PCM 由 LMS 经 Slimproto 直送 "
                             "squeezelite，不经过本 APP，且 macOS 无原生回环采集。\n", "m")
             t.configure(state="disabled")
@@ -4804,13 +4805,26 @@ def lyrics_online(title, artist="", album="", duration=0, force=False):
     return "", ""
 
 def np_lyrics_resolve(cfg, track, playerid="", force=False):
-    """优先级：LMS 内嵌歌词 → 在线歌词（LRCLIB / 网易云）→ 空。"""
+    """优先级：LMS 内嵌歌词 → LMS/MAI → 在线歌词（带时间轴优先）→ 空。
+
+    MAI 的 musicartistinfo lyrics 实测多为纯文本、无时间轴，因此默认仍让带
+    时间轴的在线 LRC 优先，以保留逐行同步高亮；MAI 作为「完全从 LMS 端取数」
+    的来源在在线未命中或无时间轴时兜底。配置 lyrics_prefer_lms=true 可强制
+    MAI 优先（此时会失去逐行高亮）。
+    """
     lyr, src = np_lyrics_from_lms(cfg, track.get("id", ""), playerid)
     if lyr:
         return lyr, src
+    mai, msrc = lms_mai_lyrics(cfg, track)
+    if mai and (cfg.get("lyrics_prefer_lms") or parse_lrc(mai)["timed"]):
+        return mai, msrc
     t, s = lyrics_online(track.get("title", ""), track.get("artist", ""),
                          track.get("album", ""), _to_float(track.get("duration")),
                          force=force)
+    if t and parse_lrc(t)["timed"]:
+        return t, s
+    if mai:
+        return mai, msrc
     if t:
         return t, s
     return "", ""
@@ -5160,35 +5174,87 @@ def wiki_extract(title, lang="zh"):
     return ""
 
 
-def lms_plugin_bio(cfg, kind, name):
-    """仅在显式开启 bio_lms_plugin 时调用；未装插件的 LMS 会直接断连。"""
-    if not (cfg.get("bio_lms_plugin") and name):
-        return ""
-    cmd = [("artistinfo" if kind == "artist" else "albuminfo"), "0", "5",
-           ("artist:" if kind == "artist" else "album:") + name]
+# v1.5.1：MAI 插件命令可用性缓存。插件未安装时 LMS 会断开连接，
+# 一旦探测到断连就不再重复发起，避免每切一首歌都重试。
+_MAI_STATE = {"checked": False, "ok": False}
+
+
+def mai_rpc(cfg, args, timeout=6, _id=45):
+    """调用 LMS 端 Music & Artist Information 插件的 CLI：musicartistinfo <子命令>。
+
+    正确命令是 musicartistinfo biography / albumreview / lyrics / artistphoto…
+    （旧版误用 artistinfo / albuminfo，LMS 不认识该命令会直接断连）。
+    插件未安装、命令失败或 LMS 断连一律返回空字典，由调用方自动降级。
+    """
+    if cfg.get("bio_lms_plugin") is False:
+        return {}
+    if _MAI_STATE["checked"] and not _MAI_STATE["ok"]:
+        return {}
     try:
-        r = lms_rpc(cfg, cmd, timeout=3, _id=44)
-        def longest(o, depth=0):
-            if depth > 4:
-                return ""
-            if isinstance(o, str):
-                return o.strip()
-            best = ""
-            if isinstance(o, dict):
-                for v in o.values():
-                    t = longest(v, depth + 1)
-                    if len(t) > len(best):
-                        best = t
-            elif isinstance(o, (list, tuple)):
-                for v in o:
-                    t = longest(v, depth + 1)
-                    if len(t) > len(best):
-                        best = t
-            return best
-        txt = longest(r)
-        return txt if len(txt) > 80 else ""
+        r = lms_rpc(cfg, ["musicartistinfo"] + [str(a) for a in args],
+                    timeout=timeout, _id=_id)
     except Exception:
+        _MAI_STATE.update(checked=True, ok=False)
+        return {}
+    _MAI_STATE.update(checked=True, ok=True)
+    return r if isinstance(r, dict) else {}
+
+
+def _mai_text(s):
+    """MAI 返回的长文本可能夹带 HTML 标签 / 实体，统一清洗为纯文本。"""
+    s = str(s or "")
+    s = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", s)
+    s = re.sub(r"(?s)<[^>]+>", " ", s)
+    s = html.unescape(s).replace("\u00a0", " ")
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", s)
+    return s.strip()
+
+
+def lms_plugin_bio(cfg, kind, name, extra=""):
+    """从 LMS 的 Music & Artist Information 插件取歌手简介 / 专辑评论。
+
+    kind="artist" -> musicartistinfo biography artist:<name>
+    kind="album"  -> musicartistinfo albumreview artist:<extra> album:<name>
+    未命中或插件不可用时返回空串，交由 bio_fetch 回退维基百科。
+    """
+    name = str(name or "").strip()
+    if not name:
         return ""
+    if kind == "artist":
+        r = mai_rpc(cfg, ["biography", "artist:" + name], timeout=6)
+        txt = _mai_text(r.get("biography"))
+    else:
+        artist = str(extra or "").strip()
+        args = ["albumreview"]
+        if artist:
+            args.append("artist:" + artist)
+        args.append("album:" + name)
+        r = mai_rpc(cfg, args, timeout=6)
+        txt = _mai_text(r.get("albumreview"))
+    return txt if len(txt) >= 40 else ""
+
+
+def lms_mai_lyrics(cfg, track):
+    """从 LMS 端 MAI 插件取歌词（实测多为纯文本，无 [mm:ss.xx] 时间轴）。"""
+    t = track or {}
+    tid = str(t.get("id") or "").strip()
+    url = str(t.get("url") or "").strip()
+    title = str(t.get("title") or "").strip()
+    artist = str(t.get("artist") or "").strip()
+    cmds = []
+    if tid:
+        cmds.append(["lyrics", "track_id:" + tid])
+    if url:
+        cmds.append(["lyrics", "url:" + url])
+    if title:
+        cmds.append(["lyrics", "artist:" + artist, "title:" + title])
+    for args in cmds:
+        r = mai_rpc(cfg, args, timeout=5, _id=46)
+        txt = _mai_text(r.get("lyrics"))
+        if txt:
+            return txt, "LMS · Music & Artist Information"
+    return "", ""
 
 
 def bio_fetch(cfg, artist, album="", force=False):
@@ -5201,9 +5267,9 @@ def bio_fetch(cfg, artist, album="", force=False):
         v = cache[key]
         return v.get("artist", ""), v.get("album", ""), v.get("src", "")
     a_txt = lms_plugin_bio(cfg, "artist", artist)
-    b_txt = lms_plugin_bio(cfg, "album", album)
-    a_src = "LMS 插件" if a_txt else ""
-    b_src = "LMS 插件" if b_txt else ""
+    b_txt = lms_plugin_bio(cfg, "album", album, artist)
+    a_src = "LMS · Music & Artist Information" if a_txt else ""
+    b_src = "LMS · Music & Artist Information" if b_txt else ""
     if not a_txt:
         for lang in ("zh", "en"):
             a_txt = wiki_extract(artist, lang)
@@ -5235,19 +5301,21 @@ HELP_TEXT = """Squeezelite GUI · 使用说明
   先在「升级与更新」页填好 LMS 服务器地址；若 LMS 启用了密码保护
   （Basic Auth），还需在同一页填写用户名/密码，仅设置密码时用户名留空。
   曲目信息、专辑封面来自 LMS；本页不读本机音乐目录、不依赖任何挂载点。
-  歌词优先级：LMS 内嵌歌词（songinfo tags:w）→ 在线歌词库
-  （LRCLIB / 网易云，带本地缓存）→ 手动载入本地 LRC。在线歌词由本 APP
-  直接访问公网，不需要 LMS 安装任何插件，也不要求挂载音乐目录。
-  带 [mm:ss.xx] 时间轴的歌词会随播放进度逐行高亮。
+  歌词优先级：LMS 内嵌歌词（songinfo tags:w）→ LMS 端 Music & Artist
+  Information 插件（musicartistinfo lyrics）→ 在线歌词库（LRCLIB / 网易云，
+  带本地缓存）→ 手动载入本地 LRC。带 [mm:ss.xx] 时间轴的歌词会随播放
+  进度逐行高亮；插件歌词实测多为纯文本无时间轴，故默认仍优先带时间轴的
+  在线 LRC，插件歌词作为不走公网的兜底。若希望完全从 LMS 取歌词，
+  可在 config.json 设 lyrics_prefer_lms: true（会失去逐行高亮）。
   右侧可切换「歌词 / 专辑详情 / 歌手 / 专辑简介」三个视图：
     · 歌词：LRC 时间轴随播放进度逐行高亮；「重新搜索在线歌词」忽略缓存重试；
     · 专辑详情：LMS 返回的流派、年份、音轨号、比特率、采样率、路径等全部标签；
-    · 歌手 / 专辑简介：专辑元信息始终取自 LMS 标签，长篇简介取自维基百科
-      中 / 英文 API，结果缓存在 ~/.squeezelite_gui/bio_cache.json，可点
-      「重新获取简介」强制刷新。若 LMS 已安装并启用 Music & Artist
-      Information 类插件，可在 config.json 里把 bio_lms_plugin 设为 true，
-      改用插件返回的 artistinfo / albuminfo；未装插件时开启该项会被 LMS
-      断连，因此默认关闭。
+    · 歌手 / 专辑简介：专辑元信息始终取自 LMS 标签；歌手简介优先取自 LMS 的
+      Music & Artist Information 插件（musicartistinfo biography），专辑评论
+      取自 musicartistinfo albumreview，任一未命中时回退维基百科中 / 英文 API。
+      结果缓存在 ~/.squeezelite_gui/bio_cache.json，可点「重新获取简介」强制
+      刷新。插件命令失败或未安装时自动降级，不会断连；如需彻底跳过插件，
+      在 config.json 设 bio_lms_plugin: false。
   本架构无法提供真实 FFT 频谱：PCM 由 LMS 经 Slimproto(3483) 直送
   squeezelite，不经过本 APP，macOS 也无原生回环采集设备；因此已移除
   原有的装饰性节奏动画视图，改为上述简介视图。

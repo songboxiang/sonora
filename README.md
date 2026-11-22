@@ -21,11 +21,15 @@
 - **原创应用图标**：`assets/logo.svg` + `assets/app.icns`（Material 圆角方形 +
   浮动操作按钮 + 声波弧线），非 Apple 系统资源，可随应用分发
 - 配置保存在 `~/.squeezelite_gui/`，升级前自动备份旧二进制
-- **「正在播放」看板**（v1.3.0 起，v1.5.0 增强）：跟随 LMS 播放器状态，
+- **「正在播放」看板**（v1.3.0 起，v1.5.1 增强）：跟随 LMS 播放器状态，
   展示大尺寸正方形专辑封面、曲目信息、进度，以及「歌词 / 专辑详情 /
-  歌手 / 专辑简介」三视图；歌词优先取 LMS 内嵌歌词，未命中时自动走在线
-  歌词库（LRCLIB / 网易云，带缓存），不依赖 LMS 插件、本地音乐目录或
-  挂载点，支持 LRC 时间轴逐行同步
+  歌手 / 专辑简介」三视图；歌词与歌手简介优先从 LMS 端获取
+  （`songinfo tags:w` + Music & Artist Information 插件），未命中时才走
+  在线歌词库 / 维基百科，支持 LRC 时间轴逐行同步
+- **LMS 端数据直连**（v1.5.1）：修正 MAI 插件 CLI 命令为
+  `musicartistinfo biography / albumreview / lyrics`，歌手简介、专辑评论与
+  歌词默认优先取自 LMS；插件未装 / 命令失败自动降级到维基百科与在线歌词，
+  不会断连。插件清单与安装步骤见 `docs/LMS_PLUGINS.md`
 - **音频链路 / 完美直通判定**（v1.5.0）：显示源格式（FLAC / WAV / DSD /
   PCM 等）、采样率、位深与码率；通过本 APP 启动时自动追加
   `-d output=info`，从 squeezelite 日志解析实际解码输出，结合 LMS 音量
@@ -41,6 +45,8 @@
   app bar，取代系统渲染下不可读的下拉框与 `tk.Button`
 - **Lyrion Material / Audirvana 风格收敛**（v1.5.0）：标题 / 副标题 /
   正文三级字号与高对比文字、卡片细边框、进度细条、统一按钮与状态色
+- **设计交接规范**（v1.5.1）：`docs/UI_DESIGN_BRIEF.md` 写明把 UI
+  交给设计类模型时应提供的标准、必须输出的交付物与到 tkinter 的映射
 
 ## 正在播放、歌词与音频链路
 
@@ -50,22 +56,25 @@ LMS 上的播放器；选中后即开始跟随其状态。本页只读写 LMS �
 通过 Slimproto 输出，两条通道互不影响 —— 因此即使未点「启动」，只要 LMS
 在线，本页也能显示其他遥控端发起的播放。
 
-歌词按「LMS 内嵌歌词 → 在线歌词库 → 手动载入本地 LRC」的顺序获取：
-先试 `songinfo ... tags:w`（LMS 扫描入库的内嵌歌词）与 `status tags:w`，
-未命中则自动查询在线歌词库（LRCLIB / 网易云，结果带本地缓存），仍无结果时
-可用「手动载入本地 LRC…」临时补充；点「重新搜索在线歌词」可忽略缓存重试。
-在线歌词由本 APP 直接访问公网，不需要 LMS 安装任何插件，也不依赖本机挂载
-音乐目录，因此 LMS 部署在独立服务器、曲库路径无法访问时同样可用。
-带 `[mm:ss.xx]` 时间轴的歌词会随播放进度逐行高亮。
+歌词按「LMS 内嵌歌词 → LMS/MAI 插件歌词 → 在线歌词库 → 手动 LRC」获取：
+先试 `songinfo ... tags:w`（LMS 扫描入库的内嵌歌词）与 `status tags:w`；
+未命中则调 LMS 的 Music & Artist Information 插件 `musicartistinfo lyrics
+track_id:<id>`；再未命中才查询在线歌词库（LRCLIB / 网易云，带本地缓存），
+仍无结果时可用「手动载入本地 LRC…」补充。插件歌词实测多为**纯文本、无
+时间轴**，因此默认仍让带 `[mm:ss.xx]` 时间轴的在线 LRC 优先以保留逐行
+高亮；若要完全从 LMS 端取歌词，可在 `config.json` 设
+`lyrics_prefer_lms: true`（会失去逐行高亮）。点「重新搜索在线歌词」可忽略
+缓存重试。所有路径都不依赖本机挂载音乐目录，LMS 部署在独立服务器同样可用。
 
 右侧可切换「歌词 / 专辑详情 / 歌手 / 专辑简介」三个视图：专辑详情展示
 LMS 返回的流派、年份、音轨号、比特率、采样率、文件路径等全部标签；
-简介视图把 LMS 标签提供的专辑元信息，与维基百科中 / 英文 API 取回的
-歌手、专辑长篇简介合并展示，结果缓存在
-`~/.squeezelite_gui/bio_cache.json`（权限 600，上限 300 条）。若 LMS 已
-启用 Music & Artist Information 类插件，可在配置里把 `bio_lms_plugin`
-设为 `true` 改用插件的 `artistinfo` / `albuminfo`；默认关闭，因为未装
-插件的 LMS 收到该命令会直接断连。
+简介视图把 LMS 标签提供的专辑元信息，与**歌手简介 / 专辑评论**合并展示：
+长篇内容默认优先取自 LMS 的 Music & Artist Information 插件
+（`musicartistinfo biography` / `albumreview`），任一未命中时自动回退
+维基百科中 / 英文 API；结果缓存在 `~/.squeezelite_gui/bio_cache.json`
+（权限 600，上限 300 条）。插件命令不存在或未安装时自动降级、不会断连；
+如需彻底跳过插件，在 `config.json` 设 `bio_lms_plugin: false`。
+插件清单与安装步骤见 `docs/LMS_PLUGINS.md`。
 
 **不再提供可视化视图**：真实 FFT 在本架构不可行 —— PCM 由 LMS 经
 Slimproto 直送 squeezelite，不经过本 APP，macOS 也没有原生回环采集设备；
@@ -96,21 +105,23 @@ LMS 若启用密码保护，直接在「升级与更新」页 B 区填写用户�
 `~/.squeezelite_gui/config.json` 的 `lms_user` / `lms_pass`，文件权限 600。
 服务端版本检测、正在播放与专辑封面请求都会自动携带该凭据。
 
-## 歌词来源（无需 LMS 插件）
+## 歌词来源与 LMS 插件
 
-歌词获取顺序：① LMS 内嵌歌词 `songinfo ... tags:w`；② 在线歌词库
-**LRCLIB**（`https://lrclib.net/api/get`，与 LMS 的 Music & Artist Information
-插件同源）与网易云音乐备用源；③ 页面上的「手动载入本地 LRC…」兜底。
-在线歌词由本 APP 直接访问公网，**不需要在 LMS 安装任何插件**，也不需要
-本机挂载音乐目录 —— 因此 LMS 部署在独立服务器、曲库路径不可访问时同样可用。
-结果缓存在 `~/.squeezelite_gui/lyrics_cache.json`（权限 600），点
-「重新搜索在线歌词」可忽略缓存重试。带 `[mm:ss.xx]` 时间轴的歌词会随
-`status.time` 逐行高亮。
+歌词获取顺序：① LMS 内嵌歌词 `songinfo ... tags:w`；② LMS 端
+Music & Artist Information 插件 `musicartistinfo lyrics`；③ 在线歌词库
+**LRCLIB**（`https://lrclib.net/api/get`，与 MAI 插件同源）与网易云音乐备用
+源；④ 页面上的「手动载入本地 LRC…」兜底。带 `[mm:ss.xx]` 时间轴的歌词会随
+`status.time` 逐行高亮；插件歌词多为纯文本，默认让带时间轴的在线 LRC 优先，
+可用 `lyrics_prefer_lms: true` 改为完全从 LMS 取。结果缓存在
+`~/.squeezelite_gui/lyrics_cache.json`（权限 600），点「重新搜索在线歌词」
+可忽略缓存重试。所有路径都不需要本机挂载音乐目录。
 
-注意：LMS 的 `songinfo tags:w` 只返回它扫描入库的**内嵌**歌词，默认不会读取
-同目录的独立 `.lrc` 文件。若确实希望由 LMS 端提供，需要在 LMS 插件管理里
-添加第三方插件仓库并安装 Music & Artist Information（支持同名 `.lrc`），
-但这不是本 APP 正常工作的前提。
+**LMS 端插件**：`songinfo tags:w` 只返回扫描入库的**内嵌**歌词，不会读取同目录
+独立 `.lrc`。若希望歌词、歌手简介、专辑评论都由 LMS 提供，需在 LMS
+「设置 → 插件」启用 **Music & Artist Information**（LMS 9.x 默认仓库已包含，
+通常无需添加第三方仓库）。本 APP 会自动探测插件命令，未安装时静默降级到
+在线歌词与维基百科，不影响使用。完整清单、CLI 命令与验证方法见
+`docs/LMS_PLUGINS.md`。
 
 ## 音乐库（阶段 2）
 
