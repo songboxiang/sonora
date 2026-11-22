@@ -56,7 +56,8 @@ fi
 
 # ---------- 3.5 查找本机 squeezelite 二进制（用于内置） ----------
 SL_BIN=""
-for c in "$SQUEEZELITE_GUI_BINARY" \
+SL_ENV="${SQUEEZELITE_GUI_BINARY:-}"
+for c in "$SL_ENV" \
          "$HOME/Applications/Squeezelite/Squeezelite/Squeezelite" \
          "$HOME/Applications/Squeezelite/Squeezelite/squeezelite" \
          /opt/homebrew/bin/squeezelite /usr/local/bin/squeezelite \

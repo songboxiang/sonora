@@ -6,6 +6,14 @@
 
 
 
+## v2.0.4 (2026-11-22) — 修复 PyInstaller 构建脚本中断
+
+- **build_app.sh 构建修复**：在 `set -euo pipefail` 模式下直接引用未设置的
+  `SQUEEZELITE_GUI_BINARY`，依赖安装完成后立即报 `unbound variable` 并中断。
+  改为 `${SQUEEZELITE_GUI_BINARY:-}` 默认值后再遍历候选路径；未设置时继续
+  自动查找本机 squeezelite，内置逻辑不受影响。
+- 同步更新源码包与 .app 内 `Contents/Resources` 中的脚本副本。
+
 ## v2.0.3 (2026-11-22) — 内置 squeezelite + 真更新 + 系统级开机自启
 
 - **内置二进制**：文本型 .app 首次启动自动探测本机 squeezelite 并复制到 app 内（`SQUEEZELITE_GUI_BINARY` 环境变量注入）；PyInstaller 版 build_app.sh 打包时内置二进制；main.py 兼容三种运行形态的资源定位。

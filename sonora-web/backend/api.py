@@ -43,7 +43,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.3"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.4"}
 
 
 @_wrap
