@@ -6,7 +6,13 @@ import sys
 import json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "backend"))
+
+def resource_path(rel):
+    """返回资源绝对路径；兼容 PyInstaller 冻结环境（sys._MEIPASS）。"""
+    base = getattr(sys, "_MEIPASS", None) or HERE
+    return os.path.join(base, rel)
+
+sys.path.insert(0, resource_path("backend"))
 
 import webview
 from api import api as bridge_api
@@ -15,7 +21,7 @@ VERSION = "2.0.0"
 
 
 def main():
-    web_dir = os.path.join(HERE, "web")
+    web_dir = resource_path("web")
     window = webview.create_window(
         "Sonora 颂诺",
         os.path.join(web_dir, "index.html"),

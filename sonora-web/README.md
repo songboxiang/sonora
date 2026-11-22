@@ -61,3 +61,24 @@ sonora-web/
 ## 版本历史
 
 见同目录 `CHANGELOG.md`。Tk 版 v1.x 历史见仓库根目录 `CHANGELOG.md` 与 git tags。
+
+## 封装成独立 macOS App（无需终端、无需预装 Python）
+
+本目录提供两种把 Web 版变成真正 `.app` 的方式：
+
+### 方式 A：一键封装（推荐，最终形态）
+在 macOS 上执行：
+```
+bash build_app.sh
+```
+它会用 PyInstaller 把 Python 运行时 + 依赖全部打包，产物
+`~/Applications/Sonora 颂诺.app`：双击即用、**无终端窗口、无需预装 Python、
+无需联网**（构建时需联网一次装 pyinstaller / pywebview / Pillow）。
+若首次被 Gatekeeper 拦截，执行 `xattr -cr "$HOME/Applications/Sonora 颂诺.app"`。
+
+### 方式 B：文本型 App（随包附带，改源码方便）
+压缩包里附带的 `Sonora 颂诺.app` 是标准 app 结构，launcher 指向
+`Contents/Resources` 里的源码。双击图标启动，首次自动建 `.venv` 并装依赖
+（需联网一次）。适合想直接改 `web/*.js` / `*.css` 调试的场景：
+源码就在 `Contents/Resources/web/`，改完重开即可生效，无需重新打包。
+若被 Gatekeeper 拦截：`xattr -cr "Sonora 颂诺.app"`。
