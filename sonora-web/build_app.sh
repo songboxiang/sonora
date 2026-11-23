@@ -87,7 +87,7 @@ rm -rf build dist Sonora.spec
   --hidden-import api \
   --hidden-import legacy_core \
   --hidden-import webview.platforms.cocoa \
-  --osx-bundle-identifier com.songboxiang.sonora-web \
+  --osx-bundle-identifier com.sonora.app \
   main.py || err "PyInstaller 打包失败"
 
 [ -d "dist/$APP_NAME.app" ] || err "未找到产物 dist/$APP_NAME.app"

@@ -22,8 +22,8 @@
   focus-top 那排圆形按钮上半截落在标题栏后被白色盖住，只露下半截，看着像漏边。
   新增 refine9.css，把 focus-top 下移到标题栏以下的安全区（padding-top:42px）
   并加同色顶部遮挡条。模拟标题栏截图验证按钮完整显示、无漏边。
-- **发布隐私脱敏**：预览页 build_preview.py 注入的 `lms_host=192.168.199.2`、
-  `host_name=Song-Mac`、LMS 版本 9.1.1 等真实环境快照，以及 docs/IA.md 里的
+- **发布隐私脱敏**：预览页 build_preview.py 注入的 `lms_host=<真实内网IP>`、
+  `host_name=<真实机器名>`、LMS 版本等真实环境快照，以及 docs/IA.md 里的
   真实 IP，全部替换为通用示例值；preview.html 重新生成并确认零残留。
   说明：app 运行时配置读自 `~/.squeezelite_gui/config.json`（用户家目录，
   不在 app 包内），别人首次启动只会得到空配置并走引导填自己的服务器，

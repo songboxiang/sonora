@@ -472,7 +472,7 @@ def fetch_any(urls, parser, log, label):
     raise RuntimeError("%s 全部数据源不可用：\n  " % label + "\n  ".join(errors))
 
 def parse_version(s):
-    """把 9.1.1 / 2.0.0.1465 / 9.1.2 - 1792854063 转成可比较元组。"""
+    """把 LMS 版本号（如 9.x / 2.0.0.x）转成可比较元组。"""
     if not s:
         return (0,)
     nums = [int(x) for x in re.findall(r"\d+", str(s))]
@@ -1132,7 +1132,7 @@ def fmt_sec(v):
 
 def np_status(cfg, playerid, with_lyrics=False):
     # I=samplesize(位深), T=samplerate, r=bitrate, f=filesize, o=type。
-    # 实测 LMS 9.1.1：缺 I/r/o 时位深显示「—」、码率只能靠文件大小推算。
+    # 实测 LMS 9.x：缺 I/r/o 时位深显示「—」、码率只能靠文件大小推算。
     tags = "alcKdtugybiTCmSfIro" + ("w" if with_lyrics else "")
     r = lms_rpc(cfg, ["status", "-", "1", "tags:" + tags], playerid, _id=12)
     loop = r.get("playlist_loop") or []
