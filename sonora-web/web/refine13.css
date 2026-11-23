@@ -1,0 +1,57 @@
+/* ============================================================
+   refine13.css — v2.0.17 真实音频可视化（专注模式封面层）
+   ============================================================ */
+
+/* 封面列作为定位基准；可视化层是 focusCover 的兄弟节点，
+   切歌时 coverHtml() 重写 focusCover 不会冲掉可视化控件 */
+.focus-cover-col{ position:relative; }
+.viz-layer{
+  position:absolute; left:0; top:0; z-index:3;
+  pointer-events:none;               /* 默认穿透，只有按钮区可点 */
+  border-radius:12px;
+}
+/* 频谱画布：覆盖在专辑封面上，半透明叠加，不拦截鼠标 */
+.viz-canvas{
+  position:absolute; left:0; top:0; z-index:1;
+  display:block; pointer-events:none;
+  border-radius:12px;
+  mix-blend-mode:screen;
+}
+
+/* 效果切换按钮：封面底部中央，半透明玻璃条 */
+.viz-switch{
+  position:absolute; left:50%; bottom:10px; transform:translateX(-50%);
+  z-index:4; display:flex; gap:3px; pointer-events:auto;
+  padding:4px 6px; border-radius:999px;
+  background:rgba(8,14,18,.62);
+  border:1px solid rgba(255,255,255,.18);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  opacity:0; transition:opacity .22s;
+}
+.focus-cover:hover .viz-switch,
+.viz-switch:hover{ opacity:1; }
+.viz-switch button{
+  width:30px; height:26px; line-height:1; font-size:15px;
+  color:rgba(255,255,255,.72); background:transparent;
+  border:0; border-radius:999px; cursor:pointer;
+  transition:.18s;
+}
+.viz-switch button:hover{ color:#fff; background:rgba(255,255,255,.12); }
+.viz-switch button.on{
+  color:#0b1a17; background:rgba(124,199,166,.95);
+  box-shadow:0 0 14px rgba(124,199,166,.5);
+}
+
+/* 状态提示：无音频流/不支持时显示，位于封面顶部 */
+.viz-status{
+  position:absolute; left:0; right:0; top:10px; z-index:4;
+  text-align:center; font-size:12px; line-height:1.4;
+  color:rgba(255,255,255,.9);
+  padding:0 10px; pointer-events:none;
+}
+.viz-status:empty{ display:none; }
+/* 有提示时给文字加暗底，保证在亮封面上可读 */
+.viz-status:not(:empty)::before{
+  content:""; position:absolute; inset:-5px 8px; z-index:-1;
+  background:rgba(0,0,0,.45); border-radius:8px;
+}

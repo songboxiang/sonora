@@ -627,8 +627,8 @@
       // 抑制轮询覆盖：LMS seek 生效有延迟，2.5s 内不让 pollStatus 用旧 time 弹回
       S.seekingUntil=Date.now()+2500;
       S.time=pendingSec; updateTimeUI();
-      apiCall("setSeek",{ok:false},pendingSec).then(r=>{
-        if(r&&r.ok===false){ toast("定位失败："+((r&&r.error)||"播放器不在线")); }
+      apiCall("setSeek",{ok:false,error:"播放器暂不可用"},pendingSec).then(r=>{
+        if(r&&r.ok===false){ toast("定位失败："+((r&&r.error)||"播放器暂不可用")); }
       });
     };
     barEl.style.cursor="pointer";
@@ -697,6 +697,163 @@
   $("collapsePlayer").addEventListener("click",()=>{ $("playerScreen").hidden=true; S.playerOpen=false; });
   function openPlayer(){ $("playerScreen").hidden=false; S.playerOpen=true; }
   $("focusBtn").addEventListener("click",openFocus);
+  /* ---------- 真实音频可视化（Web Audio AnalyserNode）----------
+     数据源：后端 getAudioStreamUrl 返回经本地代理的 LMS 音频流（带 CORS）。
+     <audio> 静音播放（不重复出声，实际声音仍由 squeezelite 输出），
+     AnalyserNode 提取实时频谱 → Canvas 绘制。切换效果：频谱柱/波形/环形/关闭。*/
+  const VIZ = {
+    mode: "bars", active: false, raf: 0,
+    audio: null, ctx: null, analyser: null, src: null, gain: null,
+    freq: null, time: null, canvas: null, g: null,
+    retry: 0, lastUrl: ""
+  };
+  const VIZ_MODES = ["bars", "wave", "circle", "off"];
+
+  function vizSetStatus(msg){
+    const el=$("vizStatus"); if(el) el.textContent=msg||"";
+  }
+  function vizSetMode(mode){
+    VIZ.mode=mode;
+    const sw=$("vizSwitch");
+    if(sw) sw.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.viz===mode));
+    try{ localStorage.setItem("sonora_viz_mode",mode); }catch(e){}
+    try{
+      const cv=$("vizCanvas");
+      if(cv) cv.style.display=(mode==="off")?"none":"block";
+    }catch(e){}
+  }
+  function vizResize(){
+    const cv=VIZ.canvas; if(!cv) return;
+    const box=$("focusCover"); if(!box) return;
+    const r=box.getBoundingClientRect();
+    // vizLayer 绝对定位覆盖在 focusCover 上（切歌重写 focusCover 不受影响）
+    const layer=$("vizLayer"); if(layer){
+      layer.style.left=box.offsetLeft+"px"; layer.style.top=box.offsetTop+"px";
+      layer.style.width=r.width+"px"; layer.style.height=r.height+"px";
+    }
+    const dpr=Math.min(2,window.devicePixelRatio||1);
+    cv.width=Math.max(1,Math.floor(r.width*dpr));
+    cv.height=Math.max(1,Math.floor(r.height*dpr));
+    cv.style.width=r.width+"px"; cv.style.height=r.height+"px";
+    if(VIZ.g) VIZ.g.setTransform(dpr,0,0,dpr,0,0);
+  }
+  async function startVisualizer(){
+    if(VIZ.active) return;
+    if(VIZ.mode==="off"){ vizSetStatus(""); return; }
+    const cv=$("vizCanvas");
+    if(!cv){ vizSetStatus(""); return; }
+    VIZ.canvas=cv; VIZ.g=cv.getContext("2d");
+    vizResize();
+    try{
+      const r=await apiCall("getAudioStreamUrl",{ok:false,error:"no-api"});
+      if(!r || r.ok===false){ vizSetStatus("此曲目无实时音频流 · 可视化不可用"); return; }
+      const url=r.url;
+      const AC=window.AudioContext||window.webkitAudioContext;
+      if(!AC){ vizSetStatus("当前 WebView 不支持音频分析"); return; }
+      const audio=new Audio();
+      audio.crossOrigin="anonymous";
+      audio.src=url; audio.loop=true; audio.preload="auto"; audio.volume=0; // 静音：避免重复出声
+      let ctx, analyser, src, gain;
+      try{
+        ctx=new AC();
+        src=ctx.createMediaElementSource(audio);
+        analyser=ctx.createAnalyser();
+        analyser.fftSize=1024; analyser.smoothingTimeConstant=0.82;
+        gain=ctx.createGain(); gain.gain.value=0;      // 双保险静音
+        src.connect(analyser); analyser.connect(gain); gain.connect(ctx.destination);
+      }catch(e){ vizSetStatus("音频分析初始化失败"); return; }
+      VIZ.audio=audio; VIZ.ctx=ctx; VIZ.analyser=analyser; VIZ.src=src; VIZ.gain=gain;
+      VIZ.freq=new Uint8Array(analyser.frequencyBinCount);
+      VIZ.time=new Uint8Array(analyser.fftSize);
+      VIZ.lastUrl=url; VIZ.active=true;
+      const playTry=()=>{ const p=audio.play(); if(p&&p.catch) p.catch(()=>{ /* 自动播放可能被拦，下次交互再试 */ }); };
+      playTry();
+      try{ ctx.resume&&ctx.resume(); }catch(e){}
+      audio.addEventListener("error",()=>{ vizSetStatus("音频流加载失败 · 可视化暂停"); });
+      VIZ.raf=requestAnimationFrame(vizDraw);
+      vizSetStatus("");
+    }catch(e){ vizSetStatus("可视化启动失败"); }
+  }
+  function stopVisualizer(){
+    if(VIZ.raf){ cancelAnimationFrame(VIZ.raf); VIZ.raf=0; }
+    VIZ.active=false;
+    try{ if(VIZ.audio){ VIZ.audio.pause(); VIZ.audio.src=""; VIZ.audio.load(); } }catch(e){}
+    try{ if(VIZ.ctx){ VIZ.ctx.close&&VIZ.ctx.close(); } }catch(e){}
+    VIZ.audio=VIZ.ctx=VIZ.analyser=VIZ.src=VIZ.gain=null;
+    vizSetStatus("");
+  }
+  function vizDraw(){
+    if(!VIZ.active || !S.focus){ return; }
+    VIZ.raf=requestAnimationFrame(vizDraw);
+    const g=VIZ.g, cv=VIZ.canvas, an=VIZ.analyser;
+    if(!g||!cv||!an){ return; }
+    const W=cv.width/Math.min(2,window.devicePixelRatio||1);
+    const H=cv.height/Math.min(2,window.devicePixelRatio||1);
+    g.clearRect(0,0,W,H);
+    if(VIZ.mode==="off") return;
+    if(VIZ.mode==="bars"||VIZ.mode==="circle"){
+      an.getByteFrequencyData(VIZ.freq);
+      if(VIZ.mode==="bars") vizDrawBars(g,W,H,VIZ.freq);
+      else vizDrawCircle(g,W,H,VIZ.freq);
+    } else if(VIZ.mode==="wave"){
+      an.getByteTimeDomainData(VIZ.time);
+      vizDrawWave(g,W,H,VIZ.time);
+    }
+  }
+  function vizDrawBars(g,W,H,freq){
+    const n=48, step=Math.floor(freq.length/n)||1;
+    const gap=2, bw=W/n;
+    for(let i=0;i<n;i++){
+      let v=0; for(let j=0;j<step;j++) v=Math.max(v,freq[i*step+j]||0);
+      const h=Math.pow(v/255,1.35)*H*0.92;
+      const x=i*bw+gap/2;
+      const grd=g.createLinearGradient(0,H,0,H-h);
+      grd.addColorStop(0,"rgba(124,199,166,.25)");
+      grd.addColorStop(1,"rgba(160,230,255,.92)");
+      g.fillStyle=grd;
+      g.fillRect(x,H-h,Math.max(1,bw-gap),h);
+    }
+  }
+  function vizDrawWave(g,W,H,data){
+    g.lineWidth=2.5; g.strokeStyle="rgba(150,225,255,.9)";
+    g.shadowColor="rgba(124,199,166,.8)"; g.shadowBlur=12;
+    g.beginPath();
+    const step=Math.max(1,Math.floor(data.length/W));
+    for(let x=0;x<W;x++){
+      const v=(data[Math.min(data.length-1,x*step)]||128)/128;
+      const y=(v-1)*H*0.34+H/2;
+      if(x===0) g.moveTo(x,y); else g.lineTo(x,y);
+    }
+    g.stroke(); g.shadowBlur=0;
+  }
+  function vizDrawCircle(g,W,H,freq){
+    const cx=W/2, cy=H/2, R=Math.min(W,H)*0.33;
+    const n=64, step=Math.floor(freq.length/n)||1;
+    g.lineWidth=3; g.lineCap="round";
+    for(let i=0;i<n;i++){
+      const v=(freq[i*step]||0)/255;
+      const a=(i/n)*Math.PI*2 - Math.PI/2;
+      const r1=R, r2=R+v*R*0.62;
+      const hue=150+ (i/n)*90;
+      g.strokeStyle="hsla("+hue+",80%,65%,"+(0.35+v*0.6)+")";
+      g.beginPath();
+      g.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);
+      g.lineTo(cx+Math.cos(a)*r2,cy+Math.sin(a)*r2);
+      g.stroke();
+    }
+  }
+  function initViz(){
+    const sw=$("vizSwitch");
+    if(sw) sw.addEventListener("click",e=>{
+      const b=e.target.closest("button[data-viz]"); if(!b)return;
+      vizSetMode(b.dataset.viz);
+      if(S.focus){ stopVisualizer(); if(VIZ.mode!=="off") startVisualizer(); }
+    });
+    let saved="bars"; try{ saved=localStorage.getItem("sonora_viz_mode")||"bars"; }catch(e){}
+    vizSetMode(VIZ_MODES.indexOf(saved)>=0?saved:"bars");
+    window.addEventListener("resize",()=>{ if(S.focus) vizResize(); });
+  }
+
   $("focusExit").addEventListener("click",closeFocus);
   function openFocus(){
     S.focus=true; $("focusScreen").hidden=false;
@@ -704,18 +861,21 @@
     $("focusAside").hidden=true; S.fpanel="";
     document.querySelectorAll("#focusToggles button").forEach(b=>b.classList.toggle("on",b.dataset.fpanel==="lyricsOn"));
     updateTimeUI();
-    // 根治漏边：进入系统全屏，原生标题栏彻底消失（官方 API，不依赖 pyobjc）
+    // 根治漏边：进入系统全屏。后端记录进入前的真实全屏状态，退出时据此恢复，
+    // 避免"进/出专注都变窗口"。用 AppKit 读真实 styleMask，不依赖 pywebview 失效标志。
     document.body.classList.add("is-focus");
-    apiCall("setFullscreen",{},true).then(r=>{
+    apiCall("focusEnter",{},true).then(r=>{
       if(r&&r.ok===false){ apiCall("setFocusChrome",{},true); }  // 兜底：改标题栏色
     });
+    startVisualizer();     // 真实音频可视化
   }
   function closeFocus(){
     S.focus=false; $("focusScreen").hidden=true;
     document.body.classList.remove("is-focus");
-    apiCall("setFullscreen",{},false).then(r=>{
+    apiCall("focusExit",{},true).then(r=>{
       if(r&&r.ok===false){ apiCall("setFocusChrome",{},false); }
     });
+    stopVisualizer();      // 停止可视化，释放音频资源
   }
 
   /* ---------- 常规播放器面板开关 ---------- */
@@ -1890,6 +2050,7 @@
     // 增强功能初始化
     loadPlaylists(); loadQueue(); loadFavorites();
     initLyricPicker();
+    initViz();
     setTimeout(pollStatus, 300);
     setTimeout(updateConnBadge, 500);
     setInterval(pollStatus, 1000);

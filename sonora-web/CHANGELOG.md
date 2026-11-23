@@ -5,6 +5,24 @@
 的 bridge 标记，并打附注标签 `vX.Y.Z`。
 
 
+## v2.0.17 (2026-11-23) — 修复定位报错 + 全屏状态机 + 真实音频可视化
+
+- **修复拖拽进度条报错（定位失败：Remote end closed connection without response）**：
+  根因是 `setSeek` 走通用 `lms_rpc`，对瞬时断连重试 3 次×6 秒，异常冒泡到 pywebview
+  桥接层破坏 JS bridge。改为 seek 专用轻量 RPC：短超时 2 秒、不重试、异常在后端
+  完全隔离为结构化 `{ok:false,error}`，前端 fallback 带友好错误提示。
+- **全屏状态机重写（进/出专注不再都变窗口）**：根因是 pywebview 6.x 的 Window
+  根本没有 `is_fullscreen` 属性，v2.0.16 的 `getattr(win,"is_fullscreen")` 永远失败
+  走 toggle 兜底，而 pywebview 内部标志与用户用绿点/菜单切换的系统全屏不同步。
+  改为用 PyObjC 直接读 NSWindow 的 `styleMask & NSFullscreenWindowMask` 真实状态；
+  进专注前记录系统真实全屏状态——进入前是全屏则进/出专注都保持全屏，进入前是
+  窗口则进专注变全屏、退出回到窗口。用原生 `toggleFullScreen:` 并加 1.2 秒冷却防抖。
+- **专注模式真实音频可视化**：新增 4 种可切换效果（频谱柱/波形/环形/关闭）。
+  数据源为真实音频——后端起本地 HTTP 代理转发当前 LMS 音频流（带 CORS），前端
+  `<audio>` 静音播放 + Web Audio `AnalyserNode` 提取实时频谱，Canvas 绘制，随音乐
+  实时起伏；不重复出声（声音仍由 squeezelite 输出）。封面悬停显示切换条，模式
+  本地持久化。无音频流曲目的给出明确提示而非假动画。
+
 ## v2.0.16 (2026-11-23) — 专注漏边根治 + 歌词自动滚动 + 进度条拖拽
 
 - **专注模式顶部漏边（根治）**：此前 v2.0.13/14 靠 pyobjc 动态改原生标题栏颜色，

@@ -9,6 +9,8 @@ import os
 import sys
 import json
 import base64
+import urllib.parse
+import urllib.request
 import traceback
 import subprocess
 import threading
@@ -45,7 +47,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.16"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.17"}
 
 
 @_wrap
@@ -303,6 +305,115 @@ def getLyricSources(track):
             "current": (choice or {}).get("source", "") if choice else ""}
 
 
+# ---- 音频流代理（真实频谱数据源）----
+# WKWebView 里 file:// 页面无法直接跨域读 LMS 音频流；后端起一个本地 HTTP 服务
+# 转发当前播放曲目的音频流并加 CORS 头，前端 <audio> 静音播放 + Web Audio AnalyserNode
+# 分析实时频谱，实现真正随音乐变化的音频可视化。
+_AUDIO_PROXY = {"port": 0, "started": False, "server": None}
+_AUDIO_STREAM_CACHE = {"url": "", "port": 0}
+
+
+def _audio_proxy_port():
+    if _AUDIO_PROXY["started"] and _AUDIO_PROXY["port"]:
+        return _AUDIO_PROXY["port"]
+    try:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import urllib.request
+        import urllib.parse
+        _host = {"value": ""}
+
+        class _AudioHandler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _cors(self):
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Headers", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+
+            def do_OPTIONS(self):
+                try:
+                    self.send_response(204)
+                    self._cors()
+                    self.end_headers()
+                except Exception:
+                    pass
+
+            def do_GET(self):
+                try:
+                    u = urllib.parse.unquote(urllib.parse.urlparse(self.path).path.lstrip("/"))
+                    if not u.startswith("http://") and not u.startswith("https://"):
+                        self.send_response(400); self._cors(); self.end_headers(); return
+                    # 仅允许代理当前配置的 LMS 主机，避免被当作开放代理
+                    try:
+                        base = c.lms_base(CFG)
+                    except Exception:
+                        base = ""
+                    if base and not u.startswith(base):
+                        self.send_response(403); self._cors(); self.end_headers(); return
+                    req = urllib.request.Request(u, headers={"User-Agent": "Sonora/2.0"})
+                    try:
+                        hdrs = c.lms_auth_headers(CFG)
+                        for k, v in (hdrs or {}).items():
+                            req.add_header(k, v)
+                    except Exception:
+                        pass
+                    with urllib.request.urlopen(req, timeout=20) as resp:
+                        ctype = resp.headers.get("Content-Type", "audio/mpeg")
+                        body = resp.read()
+                    self.send_response(200)
+                    self._cors()
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception:
+                    try:
+                        self.send_response(502); self._cors(); self.end_headers()
+                    except Exception:
+                        pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _AudioHandler)
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        _AUDIO_PROXY.update(port=port, started=True, server=srv)
+        return port
+    except Exception:
+        return 0
+
+
+@_wrap
+def getAudioStreamUrl():
+    """返回可供 Web Audio 分析的当前曲目音频流 URL（经本地代理，带 CORS）。
+    取 LMS status 当前曲目的 url；若为 file:// 则转成 LMS 的 /music/ 直链。"""
+    try:
+        pid = _pick_pid()
+        if not pid:
+            return {"ok": False, "error": "播放器不在线"}
+        stt = c.np_status(CFG, pid)
+        track = stt.get("track") or {}
+        url = str(track.get("url") or "")
+        if not url:
+            return {"ok": False, "error": "no-url"}
+        if url.lower().startswith("file:"):
+            # file:///path/to/song.flac → LMS 的 /music/path/to/song.flac
+            path = urllib.parse.unquote(url.split("://", 1)[-1]) if "://" in url else url[5:]
+            base = c.lms_base(CFG)
+            url = base + "/music/" + urllib.parse.quote(path.lstrip("/"))
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return {"ok": False, "error": "unsupported-url", "url": url[:120]}
+        port = _audio_proxy_port()
+        if not port:
+            return {"ok": False, "error": "proxy-failed"}
+        proxy = "http://127.0.0.1:%d/%s" % (port, urllib.parse.quote(url, safe=""))
+        _AUDIO_STREAM_CACHE.update(url=url, port=port)
+        return {"ok": True, "url": proxy, "direct": url[:200]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:160]}
+
+
 def _safe_float(v):
     try:
         return float(v)
@@ -315,38 +426,86 @@ _FOCUS_CHROME = {"on": False}
 _FULLSCREEN_ACTIVE = {"on": False}
 
 
-@_wrap
-def setFullscreen(on):
-    """专注模式进入系统全屏（原生标题栏彻底消失，根治漏边）；退出恢复。
-    pywebview 6.x：优先用 is_fullscreen 属性赋值（幂等，能纠正系统 Esc 先退全屏的竞态），
-    兜底 toggle_fullscreen()。不依赖 pyobjc 动态改色。"""
-    want = bool(on)
+# ---- 全屏状态：进入专注前记录系统真实全屏状态，退出时据此恢复 ----
+_FULLSCREEN_CONTEXT = {"before_focus": False, "busy_until": 0.0}
+
+
+def _native_fullscreen():
+    """读取 NSWindow 的真实 fullscreen 状态（styleMask & NSFullscreenWindowMask）。
+    pywebview 6.x 的 Window 没有 is_fullscreen 属性，其内部标志与用户用绿点/
+    菜单切换的系统全屏不同步，必须直接问 AppKit。非 macOS 返回 False。"""
+    if sys.platform != "darwin":
+        return False
     try:
         import webview as _wv
         wins = getattr(_wv, "windows", None) or []
         if not wins:
+            return False
+        ns = getattr(wins[0], "native", None)   # NSWindow
+        if ns is None:
+            return False
+        mask = int(ns.styleMask())
+        NSFullScreenWindowMask = 1 << 14
+        return bool(mask & NSFullScreenWindowMask)
+    except Exception:
+        return False
+
+
+def _set_native_fullscreen(want):
+    """把窗口切到目标全屏状态（幂等：先读真实状态，一致则不动）。
+    用原生 toggleFullScreen: 保证进入/退出都由系统处理，标题栏彻底消失/恢复。"""
+    if sys.platform != "darwin":
+        return {"ok": False, "error": "not-macos"}
+    try:
+        if _native_fullscreen() == bool(want):
+            return {"ok": True, "already": True, "fullscreen": bool(want)}
+        import webview as _wv
+        from PyObjCTools import AppHelper
+        wins = getattr(_wv, "windows", None) or []
+        if not wins:
             return {"ok": False, "error": "no-window"}
-        win = wins[0]
-        # 首选：is_fullscreen 属性，读实际状态后幂等赋值
-        try:
-            cur = bool(getattr(win, "is_fullscreen"))
-            if cur != want:
-                setattr(win, "is_fullscreen", want)
-            _FULLSCREEN_ACTIVE["on"] = want
-            return {"ok": True, "fullscreen": want, "via": "property"}
-        except Exception:
-            pass
-        # 兜底：toggle（非幂等，靠状态标记防重复）
-        if _FULLSCREEN_ACTIVE["on"] == want:
-            return {"ok": True, "already": True, "fullscreen": want}
-        fn = getattr(win, "toggle_fullscreen", None)
-        if not callable(fn):
-            return {"ok": False, "error": "no-fullscreen-api"}
-        fn()
-        _FULLSCREEN_ACTIVE["on"] = want
-        return {"ok": True, "fullscreen": want, "via": "toggle"}
+        ns = getattr(wins[0], "native", None)
+        if ns is None:
+            return {"ok": False, "error": "no-native-window"}
+        # 必须在主线程调用 AppKit；切换动画期间加冷却，避免重复 toggle
+        now = _time.time()
+        if now < _FULLSCREEN_CONTEXT["busy_until"]:
+            return {"ok": True, "pending": True}
+        _FULLSCREEN_CONTEXT["busy_until"] = now + 1.2
+        AppHelper.callAfter(ns.toggleFullScreen_, None)
+        return {"ok": True, "fullscreen": bool(want)}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
+
+
+@_wrap
+def getFullscreenState():
+    """返回系统真实全屏状态，供前端在进专注前记录。"""
+    return {"ok": True, "fullscreen": _native_fullscreen()}
+
+
+@_wrap
+def focusEnter():
+    """进入专注：记录进入前的真实全屏状态，然后确保处于全屏。"""
+    before = _native_fullscreen()
+    _FULLSCREEN_CONTEXT["before_focus"] = before
+    r = _set_native_fullscreen(True)
+    return {"ok": True, "before": before, "fullscreen": r}
+
+
+@_wrap
+def focusExit():
+    """退出专注：恢复到进入专注前的全屏状态。
+    进入前是全屏 → 保持全屏；进入前是窗口 → 退出全屏回到窗口。"""
+    before = bool(_FULLSCREEN_CONTEXT.get("before_focus", False))
+    r = _set_native_fullscreen(before)
+    return {"ok": True, "restore": before, "fullscreen": r}
+
+
+@_wrap
+def setFullscreen(on):
+    """兼容旧调用：直接把窗口设为指定全屏状态（幂等）。"""
+    return _set_native_fullscreen(on)
 
 
 def setFocusChrome(on):
@@ -1621,11 +1780,27 @@ def toggleMute():
 
 @_wrap
 def setSeek(seconds):
-    pid = _pick_pid()
-    if not pid:
-        return {"ok": False, "error": "no player"}
-    c.lms_rpc(CFG, ["seek", str(max(0, int(seconds)))], pid, _id=107)
-    return {"ok": True}
+    """定位播放进度。seek 是高频即时命令：短超时且不重试，任何异常都在本层
+    转成结构化结果，绝不冒泡到 pywebview 桥接层（否则会破坏 JS bridge，
+    前端出现 'Remote end closed connection without response'）。"""
+    try:
+        pid = _pick_pid()
+        if not pid:
+            return {"ok": False, "error": "播放器不在线"}
+        sec = max(0, int(float(seconds)))
+        # 直接发一次 JSON-RPC，timeout=2、不重试，避免桥接线程长时间阻塞
+        url = c.lms_base(CFG) + "/jsonrpc.js"
+        payload = json.dumps({"id": 107, "method": "slim.request",
+                              "params": [pid, ["seek", str(sec)]]}).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        try:
+            headers.update(c.lms_auth_headers(CFG))
+        except Exception:
+            pass
+        c.http_request(url, data=payload, headers=headers, timeout=2)
+        return {"ok": True, "position": sec}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:160] or "定位失败"}
 
 
 
@@ -1904,6 +2079,10 @@ class BridgeAPI:
     def setLyricChoice(self, track, source, text): return setLyricChoice(track, source, text)
     def clearLyricChoice(self, track): return clearLyricChoice(track)
     def setFullscreen(self, on): return setFullscreen(on)
+    def getFullscreenState(self): return getFullscreenState()
+    def focusEnter(self): return focusEnter()
+    def focusExit(self): return focusExit()
+    def getAudioStreamUrl(self): return getAudioStreamUrl()
     def setFocusChrome(self, on): return setFocusChrome(on)
     def getArtistImage(self, artist, autoFetch=True): return getArtistImage(artist, autoFetch)
     def setArtistImage(self, artist, dataUri): return setArtistImage(artist, dataUri)

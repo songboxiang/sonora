@@ -17,6 +17,7 @@
     <link rel="stylesheet" href="refine10.css">
     <link rel="stylesheet" href="refine11.css">
     <link rel="stylesheet" href="refine12.css">
+    <link rel="stylesheet" href="refine13.css">
 </head>
 <body>
 <div class="app">
@@ -402,6 +403,18 @@
     <div class="focus-content">
       <div class="focus-cover-col">
         <div class="focus-cover" id="focusCover"><span class="ph">♪</span></div>
+        <!-- 可视化层独立于 focusCover：coverHtml() 切歌时会整体重写 focusCover，
+             故 canvas/切换条/状态必须放在兄弟层，用绝对定位叠加在封面上 -->
+        <div class="viz-layer" id="vizLayer">
+          <canvas id="vizCanvas" class="viz-canvas"></canvas>
+          <div class="viz-switch" id="vizSwitch" title="切换可视化效果">
+            <button data-viz="bars" class="on" title="频谱柱">▥</button>
+            <button data-viz="wave" title="波形">〜</button>
+            <button data-viz="circle" title="环形频谱">◎</button>
+            <button data-viz="off" title="关闭可视化">○</button>
+          </div>
+          <div class="viz-status" id="vizStatus"></div>
+        </div>
       </div>
       <div class="focus-mid">
         <div class="focus-meta">
