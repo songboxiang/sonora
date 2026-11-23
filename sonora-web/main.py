@@ -4,6 +4,7 @@
 import os
 import sys
 import json
+import atexit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -47,7 +48,23 @@ _probe_bundled_squeezelite()
 import webview
 from api import api as bridge_api
 
-VERSION = "2.0.11"
+VERSION = "2.0.12"
+
+_STOPPED = {"done": False}
+
+def stop_engine_on_exit():
+    """应用退出（点 X / Cmd+Q / 异常退出）时停止 squeezelite 引擎。"""
+    if _STOPPED["done"]:
+        return
+    _STOPPED["done"] = True
+    try:
+        r = bridge_api.stopEngine()
+        if isinstance(r, dict) and r.get("ok"):
+            print("[exit] squeezelite 已停止")
+    except Exception as e:
+        print("[exit] 停止引擎失败: %s" % e)
+
+atexit.register(stop_engine_on_exit)
 
 
 def main():
@@ -62,7 +79,21 @@ def main():
         background_color="#FAFAFA",
         text_select=True,
     )
-    webview.start(debug=os.environ.get("SQWEB_DEBUG") == "1")
+    # 点窗口 X 关闭时先停引擎（atexit 兜底 Cmd+Q / 异常退出）
+    def _on_close():
+        stop_engine_on_exit()   # 返回 None，不阻断关闭
+    try:
+        window.events.closing += _on_close
+    except Exception:
+        pass
+    try:
+        window.events.closed += _on_close
+    except Exception:
+        pass
+    try:
+        webview.start(debug=os.environ.get("SQWEB_DEBUG") == "1")
+    finally:
+        stop_engine_on_exit()
 
 
 if __name__ == "__main__":

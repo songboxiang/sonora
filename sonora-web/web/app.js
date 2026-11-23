@@ -360,9 +360,10 @@
     $("ledFmt").textContent=sp.format||"—"; $("ledRate").textContent=sp.rate||"—";
     $("ledBits").textContent=sp.bits||"—"; $("ledBitrate").textContent=sp.bitrate||"—";
     const v=(S.audio&&S.audio.verdict)||{};
-    $("ledStatus").textContent=v.short||v.title||"NO SIGNAL";
+    $("ledStatus").textContent=v.title||v.short||"NO SIGNAL";
     $("ledStatus").title=v.detail||v.title||"";
     $("ledStatus").classList.toggle("ok",v.level==="ok");
+    $("ledStatus").classList.toggle("warn",v.level==="warn");
     // lyrics
     const lines=(S.lyrics&&S.lyrics.lines)||[];
     setHTML($("lyricsBox"), lines.length? lines.map((ln,i)=>`<div class="lyric-line" data-i="${i}">${esc(lyricText(ln))}</div>`).join("") : "暂无歌词");
@@ -533,8 +534,11 @@
       }));
     } else if(k==="info"){
       const sp=(S.audio&&S.audio.spec)||{};
-      body.innerHTML=[["标题",t.title],["歌手",t.artist],["专辑",t.album],["格式",sp.format],["采样率",sp.rate],["位深",sp.bits],["码率",sp.bitrate]]
-        .filter(r=>r[1]).map(r=>`<div class="fa-info-row"><span>${r[0]}</span><b>${esc(r[1])}</b></div>`).join("");
+      const vd=(S.audio&&S.audio.verdict)||{};
+      const rows=[["标题",t.title],["歌手",t.artist],["专辑",t.album],["格式",sp.format],["采样率",sp.rate],["位深",sp.bits],["码率",sp.bitrate]];
+      if(vd.title) rows.push(["音频链路",vd.title]);
+      if(vd.detail) rows.push(["判定依据",vd.detail]);
+      body.innerHTML=rows.filter(r=>r[1]).map(r=>`<div class="fa-info-row"><span>${r[0]}</span><b>${esc(r[1])}</b></div>`).join("");
     } else if(k==="artistBio"){
       body.innerHTML=`<div class="fa-bio">${esc((S.bio&&S.bio.artist)||"暂无歌手简介")}</div>`;
     }
@@ -1021,6 +1025,13 @@
     const r=await apiCall("playlistTracks",{items:[]},pid);
     const items=(r&&r.items)||[];
     if(!items.length){ toast("列表为空"); return; }
+    // 本地歌单：整单载入 LMS 队列并从此曲开始，队列有多首才能测试切歌
+    const pl=(S.playlists||[]).find(x=>String(x.id)===String(pid));
+    if(pl && pl.local){
+      const res=await apiCall("playlistPlayAll",{ok:false},pid,index);
+      if(res&&res.ok){ toast(`已载入歌单 ${res.added} 首，正在播放第 ${index+1} 首`); loadQueue(); return; }
+      toast("载入歌单失败："+((res&&res.error)||""));
+    }
     const tid=String(items[index]&&(items[index].id||items[index].track_id)||"");
     if(tid){ await apiCall("libPlay","titles",tid); toast("已开始播放"); }
   }
@@ -1213,12 +1224,12 @@
       case "play": playItem(it); break;
       case "next": {
         const r=await apiCall("queueAdd",{ok:true},tid,true);
-        toast(r&&r.ok===false?"加入失败":`已设为下一首：${itemName(it,S.cat)}`);
+        toast(r&&r.ok===false?("加入失败："+(r&&r.error||"")):`已设为下一首：${itemName(it,S.cat)}`);
         break;
       }
       case "queue": {
         const r=await apiCall("queueAdd",{ok:true},tid,false);
-        toast(r&&r.ok===false?"加入失败":`已加入当前队列：${itemName(it,S.cat)}`);
+        toast(r&&r.ok===false?("加入失败："+(r&&r.error||"")):`已加入当前队列：${itemName(it,S.cat)}`);
         loadQueue(); break;
       }
       case "pl": openPlModal(it); break;
@@ -1247,6 +1258,7 @@
   // ---- 加入播放列表弹窗 ----
   async function openPlModal(it){
     const pls=await loadPlaylists();
+    const plMeta={title:it.title||it._name||"",artist:it.artist||"",album:it.album||""};
     const body=$("plModalBody");
     const name=esc(itemName(it,S.cat));
     if(!pls.length){
@@ -1256,7 +1268,7 @@
         const n=$("plNewNameInline").value.trim(); if(!n)return;
         const r=await apiCall("createPlaylist",{ok:true},n);
         if(r&&r.ok!==false){ const list=await loadPlaylists(); const found=list.find(x=>x.name===n);
-          if(found){ await apiCall("playlistAdd",{ok:true},found.id,String(it.id||it.track_id||"")); }
+          if(found){ await apiCall("playlistAdd",{ok:true},found.id,String(it.id||it.track_id||""),plMeta); }
           $("plModal").hidden=true; toast(`已创建并加入：${n}`); loadPlaylists();
         } else toast("创建失败");
       });
@@ -1265,14 +1277,14 @@
         pls.map(p=>`<button class="pl-pick" data-id="${esc(p.id)}">▤ ${esc(p.name)} <small>${p.trackcount||0} 首</small></button>`).join("")+
         `<div class="pl-new-row"><input id="plNewNameInline" placeholder="或新建播放列表…"><button class="btn" id="plCreateInline">新建</button></div>`;
       body.querySelectorAll(".pl-pick").forEach(b=>b.addEventListener("click",async()=>{
-        const r=await apiCall("playlistAdd",{ok:true},b.dataset.id,String(it.id||it.track_id||""));
+        const r=await apiCall("playlistAdd",{ok:true},b.dataset.id,String(it.id||it.track_id||""),plMeta);
         toast(r&&r.ok===false?"加入失败":"已加入播放列表"); $("plModal").hidden=true;
       }));
       $("plCreateInline").addEventListener("click",async()=>{
         const n=$("plNewNameInline").value.trim(); if(!n)return;
         const r=await apiCall("createPlaylist",{ok:true},n);
         if(r&&r.ok!==false){ const list=await loadPlaylists(); const found=list.find(x=>x.name===n);
-          if(found) await apiCall("playlistAdd",{ok:true},found.id,String(it.id||it.track_id||""));
+          if(found) await apiCall("playlistAdd",{ok:true},found.id,String(it.id||it.track_id||""),plMeta);
           $("plModal").hidden=true; toast(`已创建并加入：${n}`); loadPlaylists();
         } else toast("创建失败");
       });
@@ -1359,7 +1371,9 @@
       <button class="pl-remove" data-remove="${i}" title="移除">×</button></div>`; }).join("");
     box.querySelectorAll(".pl-row").forEach(el=>el.addEventListener("click",e=>{
       if(e.target.closest(".pl-remove")||e.target.closest(".pl-fav"))return;
-      const it=items[Number(el.dataset.index)]; if(it) playItem(it);
+      const idx=Number(el.dataset.index);
+      if(S.plSource) { loadNamedThenPlay(S.plSource, idx); return; }
+      const it=items[idx]; if(it) playItem(it);
     }));
     box.querySelectorAll(".pl-remove").forEach(b=>b.addEventListener("click",async e=>{
       e.stopPropagation(); const i=Number(b.dataset.remove);
@@ -1382,8 +1396,10 @@
     const n=prompt("新建播放列表名称：","我的播放列表");
     if(!n)return;
     const r=await apiCall("createPlaylist",{ok:true},n);
-    toast(r&&r.ok===false?"创建失败":`已创建：${n}`);
+    if(r&&r.ok===false){ toast("创建失败："+(r.error||"")); return; }
+    toast(`已创建：${n}`);
     await loadPlaylists();
+    const sel=$("plSelect"); if(sel && r&&r.id){ sel.value=String(r.id); S.plSource=String(r.id); renderPlTracks(r.id); }
   });
   if($("plDel")) $("plDel").addEventListener("click",async()=>{
     const pid=$("plSelect").value;

@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.11"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.12"}
 
 
 @_wrap
@@ -252,6 +252,69 @@ def getBio(artist, album=""):
     return {"artist": a or "", "album": b or "", "source": src or ""}
 
 
+def web_audio_verdict(spec, full, volume, rate, sl_state):
+    """转码/直通判定：优先依据 LMS status 的 url/type（不依赖 squeezelite 日志）。
+    url 为 file:// = LMS 直接流送源文件、未转码；
+    url 含 stream/transcode 或 type=pcm = LMS 已转码。"""
+    url = str(full.get("url") or "")
+    ltype = str(full.get("type") or "").lower()
+    ext = str(spec.get("ext") or "").lower()
+    fmt = str(spec.get("format") or "")
+    low = url.lower()
+    transcode = None
+    reason = ""
+    if low.startswith("file:"):
+        transcode = False
+        reason = "LMS 从源文件直送（%s），未经转码" % (fmt or ext or ltype)
+    elif ("/stream/" in low or "stream.mp3" in low or "stream.flac" in low
+          or "transcode" in low or "transcoded" in low):
+        transcode = True
+        reason = "LMS 输出为转码流（URL: %s）" % url[:80]
+    elif ltype in ("pcm", "wav", "aif", "aiff") and ext not in (".pcm", ".wav", ".aif", ".aiff"):
+        transcode = True
+        reason = "源文件为 %s，LMS 输出 type=%s（PCM），说明已解码转码" % (fmt or ext, ltype)
+    elif low:
+        transcode = False
+        reason = "LMS 直接流送源文件（%s）" % (fmt or ext or ltype)
+    else:
+        reason = "LMS 未提供流 URL"
+    # squeezelite 日志若可用，作为补充证据（不改变 file:// 的直送结论）
+    if isinstance(sl_state, dict) and sl_state:
+        try:
+            if sl_state.get("converted"):
+                transcode = True
+                reason = str(sl_state.get("note") or "输出设备不支持，已转换为 PCM")
+            elif sl_state.get("rate") and spec.get("rate_hz") and int(sl_state["rate"]) != int(spec["rate_hz"]):
+                transcode = True
+                reason = "输出采样率与源文件不同（源 %s → 输出 %s）" % (
+                    spec.get("rate"), str(sl_state["rate"]))
+        except Exception:
+            pass
+    try:
+        vol = int(float(volume))
+    except Exception:
+        vol = 100
+    try:
+        rate_f = float(rate)
+    except Exception:
+        rate_f = 1.0
+    notes = []
+    if vol != 100:
+        notes.append("音量 %d%%（非 100，会改动 PCM）" % vol)
+    if abs(rate_f - 1.0) > 0.001:
+        notes.append("播放速率 %s" % rate)
+    if transcode is True:
+        level, title, short = "warn", "已转码", "已转码"
+    elif transcode is False:
+        level, title, short = "ok", "未转码 · 源文件直送", "未转码"
+    else:
+        level, title, short = "unknown", "待确认", "待确认"
+    detail = reason + ("；" + "；".join(notes) if notes else "")
+    return {"level": level, "title": title, "detail": detail, "short": short,
+            "transport": ("transcoded" if transcode is True else
+                          "direct" if transcode is False else "unknown"),
+            "volume": vol, "rate": rate}
+
 @_wrap
 def getAudio(track):
     """从 LMS 当前播放状态直接取完整曲目字段解析音频规格，不依赖前端传参。
@@ -306,17 +369,10 @@ def getAudio(track):
             vst = {"volume": stt.get("volume", 100), "rate": stt.get("rate", 1)}
     except Exception:
         pass
-    verdict = c.audio_link_verdict(spec, vst, sl_state, True)
-    if isinstance(verdict, (tuple, list)) and len(verdict) >= 3:
-        verdict = {"level": verdict[0], "title": verdict[1], "detail": verdict[2]}
-    if isinstance(verdict, dict):
-        _t = str(verdict.get("title") or "")
-        verdict["short"] = ("BIT-PERFECT" if "完美直通" in _t else
-                            "已转码" if "转码" in _t else
-                            "已重采样" if "重采样" in _t else
-                            "音量介入" if "音量" in _t else
-                            "非1倍速" if "倍速" in _t else "待确认")
-    return {"spec": spec, "verdict": verdict, "slState": sl_state}
+    verdict = web_audio_verdict(spec, full, vst.get("volume", 100),
+                                vst.get("rate", 1), sl_state)
+    return {"spec": spec, "verdict": verdict, "slState": sl_state,
+            "url": str(full.get("url") or "")}
 
 
 # ---- 播放控制 ----
@@ -950,75 +1006,141 @@ def toggleFavorite(trackId, favorited=None, meta=None):
     return {"ok": True, "favorited": want, "playlistId": FAV_LOCAL_ID, "trackId": tid}
 
 
+# ---- 本地播放列表持久化（LMS playlists 接口在本环境不可用，全部本地实现）----
+_PL_FILE = os.path.join(os.path.expanduser("~/.squeezelite_gui"), "playlists.json")
+
+def _pl_load():
+    """返回 {pid: {"name":..., "tracks":[{id,title,artist,album}]}}"""
+    try:
+        with open(_PL_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _pl_save(d):
+    try:
+        os.makedirs(os.path.dirname(_PL_FILE), exist_ok=True)
+        tmp = _PL_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _PL_FILE)
+        return True
+    except Exception:
+        return False
+
+def _new_pid(d):
+    """生成一个不冲突的本地列表 id。"""
+    n = 1
+    while ("pl%d" % n) in d:
+        n += 1
+    return "pl%d" % n
+
 @_wrap
 def getPlaylists():
-    """播放列表：LMS 列表 + 置顶虚拟「♥ 收藏」列表（本地收藏）。"""
-    try:
-        r = _rpc_server(["playlists"], _id=92)
-        items = _pl_items(r)
-    except Exception:
-        items = []
-    # 始终注入本地收藏列表，确保下拉里一定有收藏入口
+    """播放列表：本地持久化列表 + 置顶虚拟「♥ 收藏」。"""
+    d = _pl_load()
+    items = []
+    for pid, pl in d.items():
+        if not isinstance(pl, dict):
+            continue
+        tracks = pl.get("tracks") or []
+        items.append({"id": pid, "name": str(pl.get("name") or pid),
+                      "trackcount": len(tracks), "local": True})
     fav = _fav_load()
-    items = [p for p in items if str(p.get("id")) != FAV_LOCAL_ID]
     items.insert(0, {"id": FAV_LOCAL_ID, "name": FAV_PLAYLIST_NAME,
                      "trackcount": len(fav), "locked": True, "isFav": True})
     return {"items": items}
 
-
-
+@_wrap
 def createPlaylist(name):
     name = str(name or "").strip()
     if not name:
         return {"ok": False, "error": "播放列表名称不能为空"}
     if name == FAV_PLAYLIST_NAME:
         return {"ok": False, "error": "该名称为系统保留，不可用于新建列表"}
-    _rpc_server(["playlists", "new", name], _id=93)
-    return {"ok": True, "name": name}
-
+    d = _pl_load()
+    for pl in d.values():
+        if isinstance(pl, dict) and str(pl.get("name") or "").strip() == name:
+            return {"ok": False, "error": "同名播放列表已存在"}
+    pid = _new_pid(d)
+    d[pid] = {"name": name, "tracks": []}
+    if not _pl_save(d):
+        return {"ok": False, "error": "本地播放列表写入失败"}
+    return {"ok": True, "id": pid, "name": name, "playlistId": pid}
 
 @_wrap
 def deletePlaylist(playlistId):
     pid = str(playlistId or "")
     if not pid:
         return {"ok": False, "error": "缺少播放列表 ID"}
-    # 「♥ 收藏」为系统内置列表，禁止删除
-    if pid == _fav_playlist():
+    if pid == FAV_LOCAL_ID:
         return {"ok": False, "error": "「♥ 收藏」为系统列表，不可删除"}
-    _rpc_server(["playlists", "del", pid], _id=94)
+    d = _pl_load()
+    if pid not in d:
+        return {"ok": False, "error": "播放列表不存在"}
+    d.pop(pid, None)
+    if not _pl_save(d):
+        return {"ok": False, "error": "本地播放列表写入失败"}
     return {"ok": True, "id": pid}
-
 
 @_wrap
 def renamePlaylist(playlistId, name):
     pid, name = str(playlistId or ""), str(name or "").strip()
     if not pid or not name:
         return {"ok": False, "error": "缺少参数"}
-    if name == FAV_PLAYLIST_NAME or pid == _fav_playlist():
+    if name == FAV_PLAYLIST_NAME or pid == FAV_LOCAL_ID:
         return {"ok": False, "error": "「♥ 收藏」为系统列表，不可重命名"}
-    _rpc_server(["playlists", "rename", pid, name], _id=95)
+    d = _pl_load()
+    if pid not in d:
+        return {"ok": False, "error": "播放列表不存在"}
+    d[pid]["name"] = name
+    if not _pl_save(d):
+        return {"ok": False, "error": "本地播放列表写入失败"}
     return {"ok": True, "id": pid, "name": name}
 
-
 @_wrap
-def playlistAdd(playlistId, trackId):
+def playlistAdd(playlistId, trackId, meta=None):
     pid, tid = str(playlistId or ""), str(trackId or "")
     if not pid or not tid:
         return {"ok": False, "error": "缺少播放列表或曲目 ID"}
     if pid == FAV_LOCAL_ID:
-        return toggleFavorite(tid, True)
-    _rpc_server(["playlists", "add", pid, tid], _id=96)
-    return {"ok": True}
-
+        return toggleFavorite(tid, True, meta)
+    d = _pl_load()
+    if pid not in d:
+        return {"ok": False, "error": "播放列表不存在"}
+    pl = d[pid]
+    tracks = pl.setdefault("tracks", [])
+    if any(str(x.get("id")) == tid for x in tracks if isinstance(x, dict)):
+        return {"ok": True, "duplicate": True, "count": len(tracks)}
+    m = meta if isinstance(meta, dict) else {}
+    tracks.append({"id": tid, "title": str(m.get("title") or ""),
+                   "artist": str(m.get("artist") or ""), "album": str(m.get("album") or "")})
+    if not _pl_save(d):
+        return {"ok": False, "error": "本地播放列表写入失败"}
+    return {"ok": True, "count": len(tracks)}
 
 @_wrap
 def playlistRemove(playlistId, index):
     pid = str(playlistId or "")
     if not pid:
         return {"ok": False, "error": "缺少播放列表 ID"}
-    _rpc_server(["playlists", "del", pid, str(index)], _id=97)
-    return {"ok": True}
-
+    if pid == FAV_LOCAL_ID:
+        return {"ok": False, "error": "收藏列表请用取消收藏操作"}
+    d = _pl_load()
+    if pid not in d:
+        return {"ok": False, "error": "播放列表不存在"}
+    tracks = d[pid].setdefault("tracks", [])
+    try:
+        i = int(index)
+    except Exception:
+        return {"ok": False, "error": "曲目序号无效"}
+    if i < 0 or i >= len(tracks):
+        return {"ok": False, "error": "曲目序号越界"}
+    tracks.pop(i)
+    if not _pl_save(d):
+        return {"ok": False, "error": "本地播放列表写入失败"}
+    return {"ok": True, "count": len(tracks)}
 
 @_wrap
 def playlistTracks(playlistId):
@@ -1030,23 +1152,23 @@ def playlistTracks(playlistId):
         items = []
         for tid, meta in fav.items():
             m = meta if isinstance(meta, dict) else {}
-            d = {"id": str(tid), "title": str(m.get("title") or ""),
-                 "artist": str(m.get("artist") or ""), "album": str(m.get("album") or "")}
-            d["_name"] = d["title"] or d["album"] or d["id"]
-            items.append(d)
+            d0 = {"id": str(tid), "title": str(m.get("title") or ""),
+                  "artist": str(m.get("artist") or ""), "album": str(m.get("album") or "")}
+            d0["_name"] = d0["title"] or d0["album"] or d0["id"]
+            items.append(d0)
         return {"items": items, "total": len(items)}
-    r = _rpc_server(["playlists", "tracks", pid, "0", "500"], _id=98)
-    loop = (r.get("playlist_tracks_loop") or r.get("titles_loop")
-            or r.get("playlist_loop") or [])
+    d = _pl_load()
+    if pid not in d:
+        return {"items": [], "ok": False, "error": "播放列表不存在"}
     items = []
-    for it in loop:
-        if not isinstance(it, dict):
+    for x in (d[pid].get("tracks") or []):
+        if not isinstance(x, dict):
             continue
-        d = {k: ("" if v is None else str(v)) for k, v in it.items()}
-        d["_name"] = d.get("title") or d.get("album") or d.get("id") or ""
-        items.append(d)
+        d0 = {"id": str(x.get("id") or ""), "title": str(x.get("title") or ""),
+              "artist": str(x.get("artist") or ""), "album": str(x.get("album") or "")}
+        d0["_name"] = d0["title"] or d0["album"] or d0["id"]
+        items.append(d0)
     return {"items": items, "total": len(items)}
-
 
 @_wrap
 def getQueue():
@@ -1069,6 +1191,50 @@ def getQueue():
 
 
 @_wrap
+def playlistPlayAll(playlistId, startIndex=0):
+    """把本地歌单整单载入 LMS 播放队列并从指定曲目开始播放。
+    这样队列里有多首歌，才能验证上一曲/下一曲/播完自动切歌。"""
+    pid = str(playlistId or "")
+    try:
+        idx = int(startIndex)
+    except Exception:
+        idx = 0
+    if pid == FAV_LOCAL_ID:
+        fav = _fav_load()
+        tids = [str(x) for x in fav.keys()]
+    else:
+        d = _pl_load()
+        if pid not in d:
+            return {"ok": False, "error": "播放列表不存在"}
+        tids = [str(x.get("id")) for x in (d[pid].get("tracks") or [])
+                if isinstance(x, dict) and x.get("id")]
+    if not tids:
+        return {"ok": False, "error": "歌单为空"}
+    if idx < 0 or idx >= len(tids):
+        idx = 0
+    player = _pick_pid()
+    if not player:
+        return {"ok": False, "error": "播放器不在线"}
+    try:
+        c.lms_rpc(CFG, ["playlist", "clear"], player, _id=110)
+    except Exception:
+        pass
+    added = 0
+    for tid in tids:
+        try:
+            c.lms_rpc(CFG, ["playlistcontrol", "cmd:add", "track_id:" + tid], player, _id=111)
+            added += 1
+        except Exception:
+            continue
+    if added == 0:
+        return {"ok": False, "error": "曲目载入失败"}
+    try:
+        c.lms_rpc(CFG, ["playlist", "index", str(idx)], player, _id=112)
+    except Exception:
+        c.lms_rpc(CFG, ["play", str(idx)], player, _id=113)
+    return {"ok": True, "added": added, "index": idx, "total": len(tids)}
+
+@_wrap
 def queueAdd(trackId, playNext=False):
     tid = str(trackId or "")
     pid = _pick_pid()
@@ -1077,8 +1243,16 @@ def queueAdd(trackId, playNext=False):
     # 关键修复：LMS 的 "playlist add" 需要 URL，纯数字 id 会被静默忽略；
     # 必须用 playlistcontrol + track_id:N（与 libPlay 的 load 同族），才能真正加入队列。
     cmd = "insert" if playNext else "add"
+    before = getQueue()
+    before_ids = [str(x.get("id")) for x in (before.get("items") or [])]
     c.lms_rpc(CFG, ["playlistcontrol", "cmd:" + cmd, "track_id:" + tid], pid, _id=100)
-    return {"ok": True, "next": bool(playNext)}
+    # 复核：真实 LMS 下有些命令会返回 count 但队列没变，必须以队列结果为准
+    after = getQueue()
+    after_ids = [str(x.get("id")) for x in (after.get("items") or [])]
+    ok = (len(after_ids) > len(before_ids)) or (tid in after_ids and cmd == "insert")
+    return {"ok": ok, "next": bool(playNext), "trackId": tid,
+            "queueCount": len(after_ids),
+            "error": None if ok else "命令已发送但队列未变化（播放器可能不在线）"}
 
 
 @_wrap
@@ -1472,6 +1646,7 @@ class BridgeAPI:
     def playlistAdd(self, playlistId, trackId): return playlistAdd(playlistId, trackId)
     def playlistRemove(self, playlistId, index): return playlistRemove(playlistId, index)
     def playlistTracks(self, playlistId): return playlistTracks(playlistId)
+    def playlistPlayAll(self, playlistId, startIndex=0): return playlistPlayAll(playlistId, startIndex)
     def getQueue(self): return getQueue()
     def queueAdd(self, trackId, playNext=False): return queueAdd(trackId, playNext)
     def queueRemove(self, index): return queueRemove(index)
