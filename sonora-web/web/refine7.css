@@ -1,0 +1,61 @@
+/* ============================================================
+   refine7.css — v2.0.10 真机二次反馈修复
+   1) 面板全部开启时底部遮挡 -> 面板容器可滚动
+   2) 进度条点击热区扩大，拖拽更跟手
+   3) 正在播放曲目 ▶ 标识
+   ============================================================ */
+
+/* ---------- #1 播放器面板区：4 个面板全开时不遮挡，可整体滚动 ---------- */
+.player-panels{
+  min-height:0;                 /* 允许在 flex 父容器内收缩 */
+  overflow-y:auto;              /* 面板超出可视区时整体滚动 */
+  overflow-x:hidden;
+  align-content:start;          /* grid 从顶部开始排，不拉伸平分导致裁切 */
+  grid-auto-rows:min-content;   /* 行高按内容，不强制等高 */
+  padding-right:2px;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(124,199,166,.45) transparent;
+}
+.player-panels::-webkit-scrollbar{ width:7px; }
+.player-panels::-webkit-scrollbar-thumb{ background:rgba(124,199,166,.45); border-radius:4px; }
+.player-panels::-webkit-scrollbar-track{ background:transparent; }
+/* 面板 body 自身保留滚动，但取消固定 min-height，避免撑高容器 */
+.player-panels .ppanel{ min-height:0; align-self:start; }
+.player-panels .ppanel-body{ max-height:340px; min-height:0; }
+
+/* ---------- #2 进度条：扩大点击热区（细条 4-6px 太难点）---------- */
+/* 用透明上下 padding 扩大 pointer 命中区，视觉高度不变 */
+.mini-progress,
+.player-progress .pbar,
+.focus-pbar{
+  position:relative;
+}
+/* 伪元素向上下各扩 10px 透明热区，事件仍落在容器上 */
+.mini-progress::before,
+.player-progress .pbar::before,
+.focus-pbar::before{
+  content:"";
+  position:absolute;
+  left:0; right:0;
+  top:-10px; bottom:-10px;
+  z-index:3;
+  cursor:pointer;
+}
+/* 拖拽时禁止 fill 宽度过渡动画，避免跟手延迟 */
+.mini-progress.seeking i,
+.player-progress .pbar.seeking i,
+.focus-pbar.seeking i{
+  transition:none;
+}
+
+/* ---------- #5 正在播放标识 ▶ ---------- */
+.now-playing{
+  display:inline-block;
+  color:#7cc7a6;
+  font-size:11px;
+  line-height:1;
+  animation:np-pulse 1.4s ease-in-out infinite;
+}
+@keyframes np-pulse{ 0%,100%{opacity:1;} 50%{opacity:.45;} }
+.pl-row.cur .pl-t,
+.fa-row.cur .fa-t{ color:#a5e6c8; font-weight:600; }

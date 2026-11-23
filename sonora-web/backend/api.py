@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.9"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.10"}
 
 
 @_wrap
@@ -111,6 +111,23 @@ def getPlayers():
 
 
 @_wrap
+# ---- 音量感知曲线（滑块线性 0-100 <-> LMS 刻度）----
+def vol_to_lms(v):
+    """滑块 0-100(线性) -> LMS mixer volume(感知平方曲线，低段更细腻)。"""
+    try:
+        x = max(0.0, min(100.0, float(v))) / 100.0
+    except Exception:
+        x = 0.6
+    return int(round(100.0 * (x ** 2)))
+
+def vol_from_lms(v):
+    """LMS mixer volume -> 滑块 0-100(线性)。"""
+    try:
+        x = max(0.0, min(100.0, float(v))) / 100.0
+    except Exception:
+        x = 0.6
+    return int(round(100.0 * (x ** 0.5)))
+
 def getStatus(playerId=""):
     pid = str(playerId or CFG.get("np_playerid") or "")
     if not pid:
@@ -121,6 +138,10 @@ def getStatus(playerId=""):
         return {"ok": False, "error": "no player available", "mode": "stop", "track": {}}
     st = c.np_status(CFG, pid)
     st["playerId"] = pid
+    try:
+        st["volume"] = vol_from_lms(st.get("volume", 100))
+    except Exception:
+        pass
     return st
 
 
@@ -275,8 +296,9 @@ def playControl(cmd):
     if not pid:
         return {"ok": False, "error": "no player"}
     # 注意：lms_rpc 内部会 list(cmd)，必须传列表；传字符串会被拆成单字符导致 LMS 断连
+    # 对齐 Tk 版已验证命令：playlist index ±1（jump 在短队列/边界会回退到开头）
     rpc_map = {"play": ["play"], "pause": ["pause"], "stop": ["stop"],
-               "next": ["playlist", "jump", "+1"], "prev": ["playlist", "jump", "-1"]}
+               "next": ["playlist", "index", "+1"], "prev": ["playlist", "index", "-1"]}
     c.lms_rpc(CFG, rpc_map[cmd], pid, _id=60)
     return {"ok": True, "cmd": cmd}
 
@@ -1014,8 +1036,10 @@ def queueAdd(trackId, playNext=False):
     pid = _pick_pid()
     if not tid or not pid:
         return {"ok": False, "error": "缺少曲目或播放器"}
+    # 关键修复：LMS 的 "playlist add" 需要 URL，纯数字 id 会被静默忽略；
+    # 必须用 playlistcontrol + track_id:N（与 libPlay 的 load 同族），才能真正加入队列。
     cmd = "insert" if playNext else "add"
-    c.lms_rpc(CFG, ["playlist", cmd, tid], pid, _id=100)
+    c.lms_rpc(CFG, ["playlistcontrol", "cmd:" + cmd, "track_id:" + tid], pid, _id=100)
     return {"ok": True, "next": bool(playNext)}
 
 
@@ -1024,7 +1048,8 @@ def queueRemove(index):
     pid = _pick_pid()
     if not pid:
         return {"ok": False, "error": "no player"}
-    c.lms_rpc(CFG, ["playlist", "del", str(index)], pid, _id=101)
+    # 关键修复：LMS 删除队列项命令是 playlist delete，非 del（del 会导致 Remote end closed）
+    c.lms_rpc(CFG, ["playlist", "delete", str(index)], pid, _id=101)
     return {"ok": True}
 
 
@@ -1062,9 +1087,9 @@ def setVolume(value):
     pid = _pick_pid()
     if not pid:
         return {"ok": False, "error": "no player"}
-    v = max(0, min(100, int(value)))
+    v = vol_to_lms(value)
     c.lms_rpc(CFG, ["mixer", "volume", str(v)], pid, _id=106)
-    return {"ok": True, "volume": v}
+    return {"ok": True, "volume": v, "slider": int(max(0, min(100, float(value))))}
 
 
 _PREV_VOLUME = {"value": None}
@@ -1088,7 +1113,7 @@ def toggleMute():
     # 当前为 0：恢复
     restore = _PREV_VOLUME["value"] or 60
     c.lms_rpc(CFG, ["mixer", "volume", str(restore)], pid, _id=109)
-    return {"ok": True, "muted": False, "volume": restore}
+    return {"ok": True, "muted": False, "volume": vol_from_lms(restore)}
 
 
 @_wrap

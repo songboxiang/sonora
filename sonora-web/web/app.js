@@ -376,7 +376,7 @@
       const cur=String(it.id)===String(S.track&&S.track.id);
       const th=it._cover?`<img class="fa-thumb" src="${it._cover}" alt="">`:`<div class="fa-thumb"></div>`;
       return `<div class="pl-row ${cur?"cur":""}" data-id="${esc(it.id)}">
-        ${th}<span class="pl-n">${String(i+1).padStart(2,"0")}</span>
+        ${th}<span class="pl-n">${cur?'<b class="now-playing">▶</b>':String(i+1).padStart(2,"0")}</span>
         <span class="pl-t">${esc(it.title||it._name)}</span></div>`;
     }).join("");
     $("playlistBox").innerHTML=html||"暂无播放列表";
@@ -415,6 +415,8 @@
       const sec=Math.round(ratio*S.duration);
       // 立即更新视觉与本地时间，给出即时反馈
       S.time=sec; updateTimeUI();
+      // 抑制轮询覆盖：LMS seek 生效有延迟，1.5s 内不让 pollStatus 用旧 time 弹回
+      S.seekingUntil = Date.now() + 1500;
       try{ if(api.setSeek) api.setSeek(sec).catch(function(){}); }catch(e){}
     };
     barEl.style.cursor="pointer";
@@ -518,7 +520,7 @@
       body.innerHTML=items.slice(0,80).map((it,i)=>{
         const cur=String(it.id)===String(t.id);
         const th=it._cover?`<img class="fa-thumb" src="${it._cover}" alt="">`:`<div class="fa-thumb"></div>`;
-        return `<div class="fa-row ${cur?"cur":""}" data-id="${esc(it.id)}"><span class="fa-n">${String(i+1).padStart(2,"0")}</span>${th}<div class="fa-tx"><div class="fa-t">${esc(it.title||it._name)}</div><div class="fa-a">${esc(it.artist||"")}</div></div></div>`;
+        return `<div class="fa-row ${cur?"cur":""}" data-id="${esc(it.id)}"><span class="fa-n">${cur?'<b class="now-playing">▶</b>':String(i+1).padStart(2,"0")}</span>${th}<div class="fa-tx"><div class="fa-t">${esc(it.title||it._name)}</div><div class="fa-a">${esc(it.artist||"")}</div></div></div>`;
       }).join("");
       body.querySelectorAll(".fa-row").forEach(el=>el.addEventListener("click",()=>{
         const it=items.find(x=>String(x.id)===el.dataset.id); if(it) playItem(it);
@@ -985,7 +987,7 @@
       const cur=i===curIdx;
       const name=it.title||it._name||it.album||it.artist||it.id||"";
       return `<div class="pl-row ${cur?"cur":""}" data-index="${i}">
-        <span class="pl-n">${String(i+1).padStart(2,"0")}</span>
+        <span class="pl-n">${cur?'<b class="now-playing">▶</b>':String(i+1).padStart(2,"0")}</span>
         <span class="pl-t" title="${esc(name)}">${esc(name)}</span>
         <button class="pl-fav ${isFav(it)?"on":""}" data-fav="${esc(it.id||it.track_id||"")}" title="收藏">${isFav(it)?"♥":"♡"}</button>
         <button class="pl-remove" data-remove="${i}" title="移除">×</button></div>`;
@@ -1030,7 +1032,7 @@
     const ordered = favs.concat(rest);
     const head = includeQueue ? '<option value="">当前队列</option>' : '';
     return head + ordered.map(p=>{
-      const mark = (p.isFav||p.locked) ? '♥ ' : '';
+      const mark = '';   // 列表名已含 ♥，避免显示两个心
       return `<option value="${esc(p.id)}">${mark}${esc(p.name)} (${p.trackcount||0})</option>`;
     }).join("");
   }
@@ -1297,7 +1299,7 @@
       const cur=i===curIdx;
       const name=it.title||it._name||it.album||it.id||"";
       return `<div class="pl-row ${cur?"cur":""}" data-index="${i}">
-        <span class="pl-n">${String(i+1).padStart(2,"0")}</span>
+        <span class="pl-n">${cur?'<b class="now-playing">▶</b>':String(i+1).padStart(2,"0")}</span>
         <span class="pl-t">${esc(name)}</span>
         <button class="pl-fav ${isFav(it)?"on":""}" data-fav="${esc(it.id||"")}" title="收藏">${isFav(it)?"♥":"♡"}</button>
         <button class="pl-remove" data-remove="${i}" title="移除">×</button></div>`;
@@ -1425,7 +1427,7 @@
       loadTrackExtras(S.track);   // 主动刷新封面/音频/歌词，不再依赖 init 那一次
     }
     S.playing = (st.mode==="play");
-    if(Number(st.time)>0) S.time=Number(st.time);
+    if(Number(st.time)>0 && Date.now()>=(S.seekingUntil||0)) S.time=Number(st.time);
     if(Number(st.duration)>0) S.duration=Number(st.duration);
     S.volume=Number(st.volume!==undefined?st.volume:S.volume);
     document.querySelectorAll('#volSlider,#pVolSlider').forEach(x=>x.value=S.volume);

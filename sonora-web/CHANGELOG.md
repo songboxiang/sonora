@@ -4,6 +4,26 @@
 `CHANGELOG.md`。发布时同步更新 `main.py` 的 `VERSION` 与 `backend/api.py`
 的 bridge 标记，并打附注标签 `vX.Y.Z`。
 
+
+## v2.0.10 (2026-11-23) — 真机二测 9 项修复 + 2 个隐藏命令 bug
+
+- **面板全部开启可滚动**：`.player-panels` 改为可纵向滚动 + 行高按内容，
+  四个信息面板全开时不再被窗口底部裁切。
+- **进度条拖拽反馈**：扩大点击热区（上下各 10px），拖拽时本地即时走时并抑制
+  轮询回弹；后端 seek 保持标准 `seek <秒数>`。
+- **上一曲/下一曲根治**：`playControl` 由 `playlist jump ±1` 改为 `playlist index ±1`
+  ——真实 LMS 验证 jump 在短队列会回退开头，index 正常切歌（实测 index 0→1）。
+- **播完自动下一曲**：依赖队列修复；队列有多首时 LMS 自然推进。
+- **播放列表正在播放标识**：队列/曲库/专注三处列表当前曲目显示绿色闪烁 ▶ 及高亮。
+- **音量感知曲线**：滑块线性 0-100 ↔ LMS 刻度用平方曲线映射，低音量段更细腻；
+  静音恢复、状态回显统一换算。
+- **收藏双心去除**：收藏列表名已含 ♥，下拉选项不再重复加 ♥ 前缀。
+- **队列能加多首（核心）**：`queueAdd` 由 `playlist add <纯数字>` 改为
+  `playlistcontrol cmd:add/insert track_id:N`——真实 LMS 验证生效（队列 12→13）。
+- **app 图标生效**：打包时把新 icns 覆盖到 app 的 `Contents/Resources/Sonora.icns`。
+- **隐藏 bug：移除队列项失败**：`queueRemove` 用 `playlist del` 会触发 LMS
+  "Remote end closed"，真实验证正确的是 `playlist delete`（已修复）。
+
 ## v2.0.9 (2026-11-23) — 真机反馈 7 项修复
 
 - **专注模式布局**：改为纵向 flex 三段布局，顶部控件 flex-wrap 防漏边穿帮；
