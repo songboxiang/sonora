@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.12"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.13"}
 
 
 @_wrap
@@ -1643,7 +1643,7 @@ class BridgeAPI:
     def createPlaylist(self, name): return createPlaylist(name)
     def deletePlaylist(self, playlistId): return deletePlaylist(playlistId)
     def renamePlaylist(self, playlistId, name): return renamePlaylist(playlistId, name)
-    def playlistAdd(self, playlistId, trackId): return playlistAdd(playlistId, trackId)
+    def playlistAdd(self, playlistId, trackId, meta=None): return playlistAdd(playlistId, trackId, meta)
     def playlistRemove(self, playlistId, index): return playlistRemove(playlistId, index)
     def playlistTracks(self, playlistId): return playlistTracks(playlistId)
     def playlistPlayAll(self, playlistId, startIndex=0): return playlistPlayAll(playlistId, startIndex)

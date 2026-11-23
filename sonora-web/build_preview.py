@@ -7,7 +7,7 @@ import base64, json, sys, re
 ROOT = Path(__file__).parent
 WEB = ROOT / "web"
 html = (WEB / "index.html").read_text()
-css = "\n".join((WEB / f).read_text() for f in ("tokens.css", "app.css", "refine.css", "refine2.css", "refine3.css", "refine4.css", "refine5.css", "refine6.css", "refine7.css", "refine8.css"))
+css = "\n".join((WEB / f).read_text() for f in ("tokens.css", "app.css", "refine.css", "refine2.css", "refine3.css", "refine4.css", "refine5.css", "refine6.css", "refine7.css", "refine8.css", "refine9.css"))
 js = (WEB / "app.js").read_text()
 logo = (WEB / "assets/logo-mark.svg").read_text()
 logo_uri = "data:image/svg+xml;base64," + base64.b64encode(logo.encode()).decode()
@@ -78,8 +78,8 @@ window.__QUEUE_ITEMS__ = [
   {id:'t4',title:'玫瑰色的人生',artist:'李荣浩',album:'模特'},
   {id:'t5',title:'海边',artist:'张惠妹',album:'你在看我吗'}
 ];
-window.__CFG__ = {theme:'dark', lms_host:'192.168.199.2', lms_port:'9000',
-  host_name:'Song-Mac', device_short:'USBDAC', name_template:'{host} - {short}',
+window.__CFG__ = {theme:'dark', lms_host:'192.168.1.100', lms_port:'9000',
+  host_name:'MyMac', device_short:'USBDAC', name_template:'{host} - {short}',
   device:'coreaudio_device', lms_user:'', np_playerid:''};
 window.__DEVICES__ = {binary:'/opt/homebrew/bin/squeezelite', reasons:[], devices:[
   {id:'',name:'BuiltIn Output',raw:'BuiltIn',source:'squeezelite -l',is_default:true},
@@ -167,9 +167,9 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     queueRemove:()=>Promise.resolve({ok:true}),
     queuePlayIndex:()=>Promise.resolve({ok:true}),
     setPlayMode:(sh,rp)=>Promise.resolve({ok:true}),
-    getConnection:()=>Promise.resolve(window.__ENGINE_ON__?{connected:true,state:'online',label:'已连接',url:'http://192.168.199.2:9000',version:'9.1.1',playerCount:1}:{connected:true,state:'noplayer',label:'已连服务器·播放器未启动',url:'http://192.168.199.2:9000',version:'9.1.1',playerCount:0,error:'请在「播放器引擎」页启动引擎'}),
+    getConnection:()=>Promise.resolve(window.__ENGINE_ON__?{connected:true,state:'online',label:'已连接',url:'http://192.168.1.100:9000',version:'9.x',playerCount:1}:{connected:true,state:'noplayer',label:'已连服务器·播放器未启动',url:'http://192.168.1.100:9000',version:'9.x',playerCount:0,error:'请在「播放器引擎」页启动引擎'}),
     engineStatus:()=>Promise.resolve({ok:true,running:!!window.__ENGINE_ON__,pid:window.__ENGINE_ON__?12345:0,uptime:window.__ENGINE_ON__?42:0,command:window.__LAUNCH__&&window.__LAUNCH__.command||'squeezelite',exitCode:null,logs:window.__ENGINE_LOGS__||['暂无日志'],binary:window.__LAUNCH__&&window.__LAUNCH__.binary||''}),
-    startEngine:()=>{ window.__ENGINE_ON__=true; window.__ENGINE_LOGS__=['$ squeezelite -n Sonora -o default','[12:00:01] 正在连接 LMS 192.168.199.2:9000...','[12:00:02] 已注册播放器，playerid=aa:bb:cc:dd:ee:ff','[12:00:03] 引擎运行中']; return Promise.resolve({ok:true,pid:12345,message:'squeezelite 已启动 (PID 12345)，正在注册到 LMS…'}); },
+    startEngine:()=>{ window.__ENGINE_ON__=true; window.__ENGINE_LOGS__=['$ squeezelite -n Sonora -o default','[12:00:01] 正在连接 LMS 192.168.1.100:9000...','[12:00:02] 已注册播放器，playerid=aa:bb:cc:dd:ee:ff','[12:00:03] 引擎运行中']; return Promise.resolve({ok:true,pid:12345,message:'squeezelite 已启动 (PID 12345)，正在注册到 LMS…'}); },
     stopEngine:()=>{ window.__ENGINE_ON__=false; window.__ENGINE_LOGS__=['[已停止引擎]']; return Promise.resolve({ok:true,message:'squeezelite 已停止'}); },
     scanDevices:()=>Promise.resolve(window.__DEVICES__),
     saveDevice:(dev,host,short)=>{ window.__CFG__.device=dev; window.__CFG__.host_name=host; window.__CFG__.device_short=short; return Promise.resolve({ok:true,playerName:(host||'Mac')+' - '+(short||'')}); },
@@ -193,7 +193,7 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
        json.dumps(cov("Mira",0),ensure_ascii=False), json.dumps(audio,ensure_ascii=False),
        json.dumps(lyrics,ensure_ascii=False), json.dumps(bio,ensure_ascii=False))
 
-html = re.sub(r'<link rel="stylesheet" href="[^"]+\.css">\s*', '', html, count=10)
+html = re.sub(r'<link rel="stylesheet" href="[^"]+\.css">\s*', '', html, count=11)
 html = html.replace('</head>', '<style>\n' + css + '\n</style>\n</head>', 1)
 html = html.replace('src="assets/logo-mark.svg"', 'src="'+logo_uri+'"')
 html = html.replace('<script src="app.js"></script>', '<script>\n'+mock+'\n</script>\n<script>\n'+js+'\n</script>')

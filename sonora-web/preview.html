@@ -1244,6 +1244,30 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; appearance:
   backface-visibility:hidden;
 }
 
+/* ============================================================
+   refine9.css — v2.0.13
+   专注模式顶部"漏边"根治：macOS 原生标题栏（约 28px）覆盖在
+   webview 顶部，focus-top 的圆形按钮上半截落在标题栏后方被
+   白色盖住，只露出下半截，看起来像深色背景漏了一条白边。
+   解决：把 focus-top 整体下移到标题栏以下的安全区。
+   ============================================================ */
+.focus-screen{ box-sizing:border-box; }
+.focus-screen .focus-top{
+  padding-top:42px !important;      /* 28px 标题栏 + 14px 余量 */
+  padding-bottom:8px !important;
+  min-height:0 !important;
+}
+/* 顶部安全条：确保任何情况下标题栏与深色内容之间不露浅色缝 */
+.focus-screen::before{
+  content:"";
+  position:absolute;
+  left:0; right:0; top:0;
+  height:42px;
+  background:#0a1416;
+  z-index:2;
+  pointer-events:none;
+}
+
 </style>
 </head>
 <body>
@@ -1710,8 +1734,8 @@ window.__QUEUE_ITEMS__ = [
   {id:'t4',title:'玫瑰色的人生',artist:'李荣浩',album:'模特'},
   {id:'t5',title:'海边',artist:'张惠妹',album:'你在看我吗'}
 ];
-window.__CFG__ = {theme:'dark', lms_host:'192.168.199.2', lms_port:'9000',
-  host_name:'Song-Mac', device_short:'USBDAC', name_template:'{host} - {short}',
+window.__CFG__ = {theme:'dark', lms_host:'192.168.1.100', lms_port:'9000',
+  host_name:'MyMac', device_short:'USBDAC', name_template:'{host} - {short}',
   device:'coreaudio_device', lms_user:'', np_playerid:''};
 window.__DEVICES__ = {binary:'/opt/homebrew/bin/squeezelite', reasons:[], devices:[
   {id:'',name:'BuiltIn Output',raw:'BuiltIn',source:'squeezelite -l',is_default:true},
@@ -1799,9 +1823,9 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     queueRemove:()=>Promise.resolve({ok:true}),
     queuePlayIndex:()=>Promise.resolve({ok:true}),
     setPlayMode:(sh,rp)=>Promise.resolve({ok:true}),
-    getConnection:()=>Promise.resolve(window.__ENGINE_ON__?{connected:true,state:'online',label:'已连接',url:'http://192.168.199.2:9000',version:'9.1.1',playerCount:1}:{connected:true,state:'noplayer',label:'已连服务器·播放器未启动',url:'http://192.168.199.2:9000',version:'9.1.1',playerCount:0,error:'请在「播放器引擎」页启动引擎'}),
+    getConnection:()=>Promise.resolve(window.__ENGINE_ON__?{connected:true,state:'online',label:'已连接',url:'http://192.168.1.100:9000',version:'9.x',playerCount:1}:{connected:true,state:'noplayer',label:'已连服务器·播放器未启动',url:'http://192.168.1.100:9000',version:'9.x',playerCount:0,error:'请在「播放器引擎」页启动引擎'}),
     engineStatus:()=>Promise.resolve({ok:true,running:!!window.__ENGINE_ON__,pid:window.__ENGINE_ON__?12345:0,uptime:window.__ENGINE_ON__?42:0,command:window.__LAUNCH__&&window.__LAUNCH__.command||'squeezelite',exitCode:null,logs:window.__ENGINE_LOGS__||['暂无日志'],binary:window.__LAUNCH__&&window.__LAUNCH__.binary||''}),
-    startEngine:()=>{ window.__ENGINE_ON__=true; window.__ENGINE_LOGS__=['$ squeezelite -n Sonora -o default','[12:00:01] 正在连接 LMS 192.168.199.2:9000...','[12:00:02] 已注册播放器，playerid=aa:bb:cc:dd:ee:ff','[12:00:03] 引擎运行中']; return Promise.resolve({ok:true,pid:12345,message:'squeezelite 已启动 (PID 12345)，正在注册到 LMS…'}); },
+    startEngine:()=>{ window.__ENGINE_ON__=true; window.__ENGINE_LOGS__=['$ squeezelite -n Sonora -o default','[12:00:01] 正在连接 LMS 192.168.1.100:9000...','[12:00:02] 已注册播放器，playerid=aa:bb:cc:dd:ee:ff','[12:00:03] 引擎运行中']; return Promise.resolve({ok:true,pid:12345,message:'squeezelite 已启动 (PID 12345)，正在注册到 LMS…'}); },
     stopEngine:()=>{ window.__ENGINE_ON__=false; window.__ENGINE_LOGS__=['[已停止引擎]']; return Promise.resolve({ok:true,message:'squeezelite 已停止'}); },
     scanDevices:()=>Promise.resolve(window.__DEVICES__),
     saveDevice:(dev,host,short)=>{ window.__CFG__.device=dev; window.__CFG__.host_name=host; window.__CFG__.device_short=short; return Promise.resolve({ok:true,playerName:(host||'Mac')+' - '+(short||'')}); },
@@ -2382,7 +2406,16 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
   const CFG2 = window.__CFG__ || {};   // 预览注入的配置快照
   function apiCall(name, fallback){
     const fn = api && api[name];
-    if(typeof fn === "function") return Promise.resolve(fn.apply(api, Array.prototype.slice.call(arguments,2))).catch(()=>fallback);
+    if(typeof fn === "function"){
+      const args=Array.prototype.slice.call(arguments,2);
+      return Promise.resolve(fn.apply(api, args)).catch(err=>{
+        // 不再静默吞异常：桥接参数不匹配等错误必须可见，避免"假成功"
+        console.error("[apiCall] "+name+" 调用失败:", err);
+        if(window.pywebview && window.pywebview.api){ try{ console.error("[apiCall] args:",JSON.stringify(args)); }catch(e){} }
+        return fallback;
+      });
+    }
+    console.warn("[apiCall] 桥接未就绪或方法不存在:",name);
     return Promise.resolve(fallback);
   }
   function setTest(el, msg, ok){ if(!el)return; el.textContent=msg; el.className="test-result "+(ok?"ok":"fail"); }
@@ -2406,7 +2439,7 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     serverLoaded=true;
   }
   if($("svTest")) $("svTest").addEventListener("click",async()=>{
-    const r=await apiCall("testServer", window.__TESTSRV__||{ok:true,version:"9.1.1"},
+    const r=await apiCall("testServer", window.__TESTSRV__||{ok:true,version:"9.x"},
       $("svHost").value,$("svPort").value,$("svUser").value,$("svPass").value);
     if(r&&r.ok!==false) setTest($("svResult"),`✓ 连接成功 · LMS ${r.version||""}`,true);
     else setTest($("svResult"),`✗ ${(r&&r.error)||"连接失败"}`,false);
@@ -3049,14 +3082,20 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     switch(act){
       case "play": playItem(it); break;
       case "next": {
-        const r=await apiCall("queueAdd",{ok:true},tid,true);
+        const r=await apiCall("queueAdd",{ok:false},tid,true);
         toast(r&&r.ok===false?("加入失败："+(r&&r.error||"")):`已设为下一首：${itemName(it,S.cat)}`);
         break;
       }
       case "queue": {
-        const r=await apiCall("queueAdd",{ok:true},tid,false);
-        toast(r&&r.ok===false?("加入失败："+(r&&r.error||"")):`已加入当前队列：${itemName(it,S.cat)}`);
-        loadQueue(); break;
+        const r=await apiCall("queueAdd",{ok:false},tid,false);
+        if(r&&r.ok===false){ toast("加入失败："+(r&&r.error||"")); break; }
+        toast(`已加入当前队列：${itemName(it,S.cat)}`);
+        // 强制切回"当前队列"视图并刷新，否则面板停在命名列表看不到新加的歌
+        S.plSource=""; const sel=$("plSelect"); if(sel) sel.value="";
+        await loadQueue();
+        const pp=document.querySelector('.ppanel[data-panel="playlist"]');
+        if(pp && pp.hidden){ pp.hidden=false; }  // 自动展开播放列表面板
+        break;
       }
       case "pl": openPlModal(it); break;
       case "fav": toggleFav(it); break;

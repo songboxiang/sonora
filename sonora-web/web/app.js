@@ -556,7 +556,16 @@
   const CFG2 = window.__CFG__ || {};   // 预览注入的配置快照
   function apiCall(name, fallback){
     const fn = api && api[name];
-    if(typeof fn === "function") return Promise.resolve(fn.apply(api, Array.prototype.slice.call(arguments,2))).catch(()=>fallback);
+    if(typeof fn === "function"){
+      const args=Array.prototype.slice.call(arguments,2);
+      return Promise.resolve(fn.apply(api, args)).catch(err=>{
+        // 不再静默吞异常：桥接参数不匹配等错误必须可见，避免"假成功"
+        console.error("[apiCall] "+name+" 调用失败:", err);
+        if(window.pywebview && window.pywebview.api){ try{ console.error("[apiCall] args:",JSON.stringify(args)); }catch(e){} }
+        return fallback;
+      });
+    }
+    console.warn("[apiCall] 桥接未就绪或方法不存在:",name);
     return Promise.resolve(fallback);
   }
   function setTest(el, msg, ok){ if(!el)return; el.textContent=msg; el.className="test-result "+(ok?"ok":"fail"); }
@@ -580,7 +589,7 @@
     serverLoaded=true;
   }
   if($("svTest")) $("svTest").addEventListener("click",async()=>{
-    const r=await apiCall("testServer", window.__TESTSRV__||{ok:true,version:"9.1.1"},
+    const r=await apiCall("testServer", window.__TESTSRV__||{ok:true,version:"9.x"},
       $("svHost").value,$("svPort").value,$("svUser").value,$("svPass").value);
     if(r&&r.ok!==false) setTest($("svResult"),`✓ 连接成功 · LMS ${r.version||""}`,true);
     else setTest($("svResult"),`✗ ${(r&&r.error)||"连接失败"}`,false);
@@ -1223,14 +1232,20 @@
     switch(act){
       case "play": playItem(it); break;
       case "next": {
-        const r=await apiCall("queueAdd",{ok:true},tid,true);
+        const r=await apiCall("queueAdd",{ok:false},tid,true);
         toast(r&&r.ok===false?("加入失败："+(r&&r.error||"")):`已设为下一首：${itemName(it,S.cat)}`);
         break;
       }
       case "queue": {
-        const r=await apiCall("queueAdd",{ok:true},tid,false);
-        toast(r&&r.ok===false?("加入失败："+(r&&r.error||"")):`已加入当前队列：${itemName(it,S.cat)}`);
-        loadQueue(); break;
+        const r=await apiCall("queueAdd",{ok:false},tid,false);
+        if(r&&r.ok===false){ toast("加入失败："+(r&&r.error||"")); break; }
+        toast(`已加入当前队列：${itemName(it,S.cat)}`);
+        // 强制切回"当前队列"视图并刷新，否则面板停在命名列表看不到新加的歌
+        S.plSource=""; const sel=$("plSelect"); if(sel) sel.value="";
+        await loadQueue();
+        const pp=document.querySelector('.ppanel[data-panel="playlist"]');
+        if(pp && pp.hidden){ pp.hidden=false; }  // 自动展开播放列表面板
+        break;
       }
       case "pl": openPlModal(it); break;
       case "fav": toggleFav(it); break;

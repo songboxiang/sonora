@@ -1,0 +1,23 @@
+/* ============================================================
+   refine9.css — v2.0.13
+   专注模式顶部"漏边"根治：macOS 原生标题栏（约 28px）覆盖在
+   webview 顶部，focus-top 的圆形按钮上半截落在标题栏后方被
+   白色盖住，只露出下半截，看起来像深色背景漏了一条白边。
+   解决：把 focus-top 整体下移到标题栏以下的安全区。
+   ============================================================ */
+.focus-screen{ box-sizing:border-box; }
+.focus-screen .focus-top{
+  padding-top:42px !important;      /* 28px 标题栏 + 14px 余量 */
+  padding-bottom:8px !important;
+  min-height:0 !important;
+}
+/* 顶部安全条：确保任何情况下标题栏与深色内容之间不露浅色缝 */
+.focus-screen::before{
+  content:"";
+  position:absolute;
+  left:0; right:0; top:0;
+  height:42px;
+  background:#0a1416;
+  z-index:2;
+  pointer-events:none;
+}
