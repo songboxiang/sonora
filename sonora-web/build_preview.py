@@ -7,7 +7,7 @@ import base64, json, sys, re
 ROOT = Path(__file__).parent
 WEB = ROOT / "web"
 html = (WEB / "index.html").read_text()
-css = "\n".join((WEB / f).read_text() for f in ("tokens.css", "app.css", "refine.css", "refine2.css", "refine3.css", "refine4.css", "refine5.css", "refine6.css", "refine7.css", "refine8.css", "refine9.css"))
+css = "\n".join((WEB / f).read_text() for f in ("tokens.css", "app.css", "refine.css", "refine2.css", "refine3.css", "refine4.css", "refine5.css", "refine6.css", "refine7.css", "refine8.css", "refine9.css", "refine10.css"))
 js = (WEB / "app.js").read_text()
 logo = (WEB / "assets/logo-mark.svg").read_text()
 logo_uri = "data:image/svg+xml;base64," + base64.b64encode(logo.encode()).decode()
@@ -116,6 +116,15 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     getLibrary:()=>Promise.resolve(window.__LIB__),
     getAudio:()=>Promise.resolve(window.__AUDIO__),
     getLyrics:()=>Promise.resolve(window.__LYRICS__),
+    getLyricSources:()=>Promise.resolve({items:[
+      {source:'网易云音乐 · 晴天 / 周杰伦',timed:true,text:'[00:00.00]晴天\n[00:05.00]故事的小黄花\n[00:10.00]从出生那年就飘着'},
+      {source:'QQ 音乐 · 晴天',timed:true,text:'[00:00.00]晴天\n[00:06.00]故事的小黄花\n[00:12.00]从出生那年就飘着'},
+      {source:'酷狗音乐 · 晴天',timed:false,text:'故事的小黄花 从出生那年就飘着\n童年的荡秋千 随记忆一直晃到现在'},
+      {source:'LRCLIB（在线同步歌词）',timed:true,text:'[00:00.00]晴天 - 周杰伦\n[00:07.00]故事的小黄花'}
+    ],current:''}),
+    setLyricChoice:(tr,src,txt)=>Promise.resolve({ok:true,source:'手动选定 · '+src,text:txt,timed:txt.indexOf('[')>=0,lines:[]}),
+    clearLyricChoice:()=>Promise.resolve({ok:true}),
+    setFocusChrome:()=>Promise.resolve({ok:true}),
     getBio:()=>Promise.resolve(window.__BIO__),
     getStatus:()=>Promise.resolve({mode:'play',time:96,duration:346,volume:60,track:window.__TRACK__}),
     getSyncStatus:()=>Promise.resolve(window.__SYNC__),
@@ -193,7 +202,7 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
        json.dumps(cov("Mira",0),ensure_ascii=False), json.dumps(audio,ensure_ascii=False),
        json.dumps(lyrics,ensure_ascii=False), json.dumps(bio,ensure_ascii=False))
 
-html = re.sub(r'<link rel="stylesheet" href="[^"]+\.css">\s*', '', html, count=11)
+html = re.sub(r'<link rel="stylesheet" href="[^"]+\.css">\s*', '', html, count=12)
 html = html.replace('</head>', '<style>\n' + css + '\n</style>\n</head>', 1)
 html = html.replace('src="assets/logo-mark.svg"', 'src="'+logo_uri+'"')
 html = html.replace('<script src="app.js"></script>', '<script>\n'+mock+'\n</script>\n<script>\n'+js+'\n</script>')

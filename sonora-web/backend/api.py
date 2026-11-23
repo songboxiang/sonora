@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.13"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.14"}
 
 
 @_wrap
@@ -236,7 +236,15 @@ def getLyrics(track):
         pass
     text, src = "", ""
     embedded = full.pop("_embedded_lyrics", "") if isinstance(full, dict) else ""
-    if embedded:
+    # 最高优先级：用户手动选定/粘贴的歌词（按 title|artist 持久化）
+    choice = None
+    try:
+        choice = c.lyric_choice_get(c.lyric_choice_key(full))
+    except Exception:
+        pass
+    if choice and choice.get("text"):
+        text, src = choice.get("text", ""), "手动选定 · " + str(choice.get("source") or "")
+    if embedded and not text:
         text, src = embedded, "LMS 内嵌"
     if not text:
         text, src = c.np_lyrics_resolve(CFG, full, pid)
@@ -244,6 +252,119 @@ def getLyrics(track):
     return {"text": text or "", "source": src or "",
             "timed": bool(parsed.get("timed")),
             "lines": parsed.get("lines", [])}
+
+
+@_wrap
+def getLyricSources(track):
+    """返回歌词候选列表，供前端手动选择 Correct source。"""
+    full = dict(track) if isinstance(track, dict) else {}
+    if not full.get("title"):
+        try:
+            pid = str(CFG.get("np_playerid") or "")
+            if not pid:
+                pid = _pick_pid()
+            if pid:
+                stt = c.np_status(CFG, pid, with_lyrics=False)
+                cur = stt.get("track") or {}
+                if cur:
+                    for k in ("id", "title", "artist", "album", "duration"):
+                        if cur.get(k) not in (None, ""):
+                            full[k] = cur.get(k)
+        except Exception:
+            pass
+    cands = c.lyrics_collect(full.get("title", ""), full.get("artist", ""),
+                             full.get("album", ""), _safe_float(full.get("duration")))
+    # LMS 内嵌歌词作为第一个候选
+    try:
+        pid = str(CFG.get("np_playerid") or "") or _pick_pid()
+        if pid:
+            stt = c.np_status(CFG, pid, with_lyrics=True)
+            emb = (stt.get("track") or {}).get("lyrics") or ""
+            if emb:
+                cands.insert(0, {"source": "LMS 内嵌歌词", "text": emb,
+                                 "timed": bool(c.parse_lrc(emb).get("timed"))})
+    except Exception:
+        pass
+    # 去重（按 text）
+    seen, uniq = set(), []
+    for x in cands:
+        t = (x.get("text") or "").strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        uniq.append({"source": x.get("source", ""), "text": x.get("text", ""),
+                     "timed": bool(x.get("timed"))})
+    choice = None
+    try:
+        choice = c.lyric_choice_get(c.lyric_choice_key(full))
+    except Exception:
+        pass
+    return {"items": uniq,
+            "current": (choice or {}).get("source", "") if choice else ""}
+
+
+def _safe_float(v):
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+
+# ---- 专注模式：动态切换原生标题栏外观（消除顶部漏边）----
+_FOCUS_CHROME = {"on": False}
+
+
+def setFocusChrome(on):
+    """进入专注模式(True)把 macOS 原生标题栏/窗口背景改为深色；
+    退出(False)恢复浅色。失败不影响功能，仅影响观感。"""
+    _FOCUS_CHROME["on"] = bool(on)
+    if sys.platform != "darwin":
+        return {"ok": False, "reason": "not-macos"}
+    try:
+        import webview as _wv
+        win = None
+        try:
+            win = _wv.windows[0] if getattr(_wv, "windows", None) else None
+        except Exception:
+            pass
+        ns = getattr(win, "native", None) if win else None
+        if ns is None:
+            return {"ok": False, "reason": "no-native-window"}
+        from AppKit import NSColor
+        if on:
+            col = NSColor.colorWithCalibratedRed_green_blue_alpha_(10/255.0, 20/255.0, 22/255.0, 1.0)
+            try:
+                ns.setOpaque_(True)
+            except Exception:
+                pass
+        else:
+            col = NSColor.colorWithCalibratedRed_green_blue_alpha_(250/255.0, 250/255.0, 250/255.0, 1.0)
+        ns.setBackgroundColor_(col)
+        try:
+            ns.setTitlebarAppearsTransparent_(bool(on))
+        except Exception:
+            pass
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@_wrap
+def setLyricChoice(track, source, text):
+    """用户选择/粘贴歌词后持久化；返回解析后的歌词对象供前端直接显示。"""
+    key = c.lyric_choice_key(track if isinstance(track, dict) else {})
+    text = str(text or "")
+    src = str(source or "手动")
+    ok = c.lyric_choice_set(key, src, text)
+    parsed = c.parse_lrc(text)
+    return {"ok": ok, "source": "手动选定 · " + src, "text": text,
+            "timed": bool(parsed.get("timed")), "lines": parsed.get("lines", [])}
+
+
+@_wrap
+def clearLyricChoice(track):
+    key = c.lyric_choice_key(track if isinstance(track, dict) else {})
+    return {"ok": c.lyric_choice_clear(key)}
 
 
 @_wrap
@@ -1609,6 +1730,10 @@ class BridgeAPI:
     def getStatus(self, playerId=""): return getStatus(playerId)
     def getCover(self, track, size=420): return getCover(track, size)
     def getLyrics(self, track): return getLyrics(track)
+    def getLyricSources(self, track): return getLyricSources(track)
+    def setLyricChoice(self, track, source, text): return setLyricChoice(track, source, text)
+    def clearLyricChoice(self, track): return clearLyricChoice(track)
+    def setFocusChrome(self, on): return setFocusChrome(on)
     def getBio(self, artist, album=""): return getBio(artist, album)
     def getAudio(self, track): return getAudio(track)
     def playControl(self, cmd): return playControl(cmd)

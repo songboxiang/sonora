@@ -22,6 +22,8 @@
     miniFolded: false,   // mini 播放器是否溃缩为小图标
     modePendingUntil: 0, // 播放模式乐观锁：此时间前轮询不回写，避免点击后弹回
     trackExtras: {},     // 曲目附属信息缓存（封面/音频/歌词/简介）by track id
+    lyricCandidates: [], // 当前曲的歌词候选
+    lyricChoiceSrc: "",  // 当前生效的歌词来源
   };
   const COLLATE = "a-zA-Z0-9";
   function fmt(sec){ sec=Math.max(0,Number(sec)||0); const m=Math.floor(sec/60),s=Math.floor(sec%60);
@@ -336,6 +338,71 @@
     }
     return null;
   }
+  // ---- 歌词选源：多平台候选 + 手动粘贴 + 手动修正 ----
+  async function openLyricPicker(){
+    const modal=$("lyricModal"); if(!modal)return;
+    modal.hidden=false;
+    const t=S.track||{};
+    const meta=$("lyricModalMeta");
+    if(meta) meta.textContent=`曲目：${t.title||"—"}${t.artist?" · "+t.artist:""}`;
+    const list=$("lyricSrcList");
+    if(list) list.innerHTML='<div class="empty-mini">正在从 网易云 / QQ 音乐 / 酷狗 / LRCLIB 抓取歌词，请稍候…</div>';
+    const pa=$("lyricPaste"); if(pa && (!pa.value||!pa.dataset.for||pa.dataset.for!==String(t.id||""))) pa.value="";
+    S.lyricCandidates=[];
+    const r=await apiCall("getLyricSources",{items:[]},t);
+    S.lyricCandidates=(r&&r.items)||[];
+    const curSrc=(r&&r.current)||"";
+    if(list){
+      if(!S.lyricCandidates.length){
+        list.innerHTML='<div class="empty-mini">未找到在线歌词，可在上方粘贴 LRC 或纯文本歌词后点「使用此歌词」。</div>';
+      } else {
+        list.innerHTML=S.lyricCandidates.map((c,i)=>{
+          const preview=String(c.text||"").replace(/\r/g,"").split("\n").filter(Boolean).slice(0,3).join(" / ").slice(0,120);
+          const isCur=curSrc && String(c.source||"").indexOf(curSrc.replace(/^手动选定\s*·\s*/,""))>=0;
+          return `<div class="lyric-src-item ${isCur?"cur":""}" data-i="${i}">
+            <div class="lsi-head"><b>${esc(c.source||"在线歌词")}</b>${c.timed?'<span class="lsi-timed">时间轴</span>':'<span class="lsi-plain">纯文本</span>'}${isCur?'<span class="lsi-current">当前</span>':''}</div>
+            <div class="lsi-preview">${esc(preview)}</div>
+            <button class="lsi-use" data-i="${i}">使用此歌词</button>
+          </div>`;
+        }).join("");
+        list.querySelectorAll(".lsi-use").forEach(b=>b.addEventListener("click",async()=>{
+          const c=S.lyricCandidates[Number(b.dataset.i)]; if(!c)return;
+          await applyLyricChoice(c.source,c.text);
+          modal.hidden=true;
+        }));
+      }
+    }
+  }
+  async function applyLyricChoice(source,text){
+    const t=S.track||{};
+    const r=await apiCall("setLyricChoice",null,t,String(source||"手动"),String(text||""));
+    if(r&&r.text!==undefined){
+      S.lyrics={text:r.text,source:r.source||("手动选定 · "+source),timed:!!r.timed,lines:r.lines||[]};
+      const id=String(t.id||t.track_id||"");
+      if(id){ S.trackExtras[id]=S.trackExtras[id]||{}; S.trackExtras[id].lyrics=S.lyrics; }
+      S.lyricChoiceSrc=S.lyrics.source;
+      applyTrackToAll();
+      toast("歌词已更新："+(r.source||source));
+    } else toast("歌词设置失败");
+  }
+  function initLyricPicker(){
+    if($("lyricPickBtn")) $("lyricPickBtn").addEventListener("click",openLyricPicker);
+    if($("lyricModalClose")) $("lyricModalClose").addEventListener("click",()=>{ $("lyricModal").hidden=true; });
+    if($("lyricModal")) $("lyricModal").addEventListener("click",e=>{ if(e.target.id==="lyricModal")e.currentTarget.hidden=true; });
+    if($("lyricUsePaste")) $("lyricUsePaste").addEventListener("click",async()=>{
+      const v=($("lyricPaste").value||"").trim();
+      if(!v){ toast("请先粘贴歌词文本"); return; }
+      await applyLyricChoice("手动粘贴",v);
+      $("lyricModal").hidden=true;
+    });
+    if($("lyricClearChoice")) $("lyricClearChoice").addEventListener("click",async()=>{
+      await apiCall("clearLyricChoice",{},S.track||{});
+      S.trackExtras={};
+      toast("已恢复默认歌词，正在重新获取…");
+      $("lyricModal").hidden=true;
+      if(S.track) loadTrackExtras(S.track);
+    });
+  }
   function setHTML(el,html){ if(el && el.innerHTML!==html) el.innerHTML=html; }
   function coverHtml(el,track){
     const cov=coverOf(track);
@@ -366,6 +433,9 @@
     $("ledStatus").classList.toggle("warn",v.level==="warn");
     // lyrics
     const lines=(S.lyrics&&S.lyrics.lines)||[];
+    const lsrc=(S.lyrics&&S.lyrics.source)||"";
+    if(S.lyricChoiceSrc!==lsrc) S.lyricChoiceSrc=lsrc;
+    const tag=$("lyricSrcTag"); if(tag) tag.textContent=lsrc?("· "+lsrc):"";
     setHTML($("lyricsBox"), lines.length? lines.map((ln,i)=>`<div class="lyric-line" data-i="${i}">${esc(lyricText(ln))}</div>`).join("") : "暂无歌词");
     setHTML($("focusLyrics"), lines.length? lines.map((ln,i)=>`<div class="flyric" data-i="${i}">${esc(lyricText(ln))}</div>`).join("") : "");
     // bio
@@ -376,6 +446,16 @@
   }
   function refreshPlaylistPanel(){
     if(S.plSource) renderPlTracks(S.plSource); else loadQueue();
+  }
+  // 统一：播放列表数据发生增删改后，一次性同步所有视图（音乐库抽屉/播放器面板/专注侧栏）
+  async function broadcastPlChange(){
+    try{ await loadPlaylists(); }catch(e){}
+    refreshPlaylistPanel();
+    // 音乐库抽屉若打开，按其当前来源刷新
+    const dlg=$("libPlDrawer");
+    if(dlg && !dlg.hidden){ refreshLpd(); }
+    // 专注模式侧栏若正显示播放列表，用真实数据重绘
+    if(S.focus && S.fpanel==="playlist"){ renderFocusPlaylist(); }
   }
   function buildPlaylist(){
     const items=(S.library&&S.library.titles&&S.library.titles.items)||[];
@@ -488,8 +568,13 @@
     $("focusAside").hidden=true; S.fpanel="";
     document.querySelectorAll("#focusToggles button").forEach(b=>b.classList.toggle("on",b.dataset.fpanel==="lyricsOn"));
     updateTimeUI();
+    // 原生标题栏改深色，消除顶部白边（失败不影响功能）
+    apiCall("setFocusChrome",{},true);
   }
-  function closeFocus(){ S.focus=false; $("focusScreen").hidden=true; }
+  function closeFocus(){
+    S.focus=false; $("focusScreen").hidden=true;
+    apiCall("setFocusChrome",{},false);
+  }
 
   /* ---------- 常规播放器面板开关 ---------- */
   $("panelToggles").addEventListener("click",e=>{
@@ -505,6 +590,44 @@
   }));
 
   /* ---------- 专注模式面板开关 ---------- */
+  // 专注侧栏「播放列表」：与音乐库抽屉/播放器面板共用同一数据源（当前队列或所选歌单）
+  async function renderFocusPlaylist(){
+    const body=$("faBody"); if(!body)return;
+    const titleEl=$("faTitle");
+    let items, curIdx=-1, emptyMsg="当前队列为空";
+    if(S.plSource){
+      const pl=(S.playlists||[]).find(x=>String(x.id)===String(S.plSource));
+      if(titleEl) titleEl.textContent=(pl?pl.name:"播放列表");
+      const r=await apiCall("playlistTracks",{items:[]},S.plSource);
+      items=(r&&r.items)||[]; emptyMsg="该播放列表暂无曲目";
+    } else {
+      if(titleEl) titleEl.textContent="当前队列";
+      const r=await apiCall("getQueue",{items:[],index:0});
+      items=(r&&r.items)||[]; curIdx=(r&&r.index)||0;
+    }
+    if(S.fpanel!=="playlist") return;   // 期间已切换面板，丢弃旧结果
+    const curId=String(S.track&&S.track.id||"");
+    if(!items.length){ body.innerHTML=`<div class="empty-mini">${emptyMsg}</div>`; return; }
+    body.innerHTML=items.map((it,i)=>{
+      const cur=(i===curIdx)||(!!curId && String(it.id||it.track_id||"")===curId);
+      const name=it.title||it._name||it.album||it.artist||it.id||"";
+      return `<div class="fa-row ${cur?"cur":""}" data-index="${i}"><span class="fa-n">${cur?'<b class="now-playing">▶</b>':String(i+1).padStart(2,"0")}</span><div class="fa-tx"><div class="fa-t" title="${esc(name)}">${esc(name)}</div><div class="fa-a">${esc(it.artist||"")}</div></div><button class="fa-remove" data-remove="${i}" title="移除">×</button></div>`;
+    }).join("");
+    body.querySelectorAll(".fa-row").forEach(el=>el.addEventListener("click",e=>{
+      if(e.target.closest(".fa-remove"))return;
+      const i=Number(el.dataset.index);
+      if(S.plSource) loadNamedThenPlay(S.plSource,i);
+      else apiCall("queuePlayIndex",{ok:true},i).then(()=>broadcastPlChange());
+    }));
+    body.querySelectorAll(".fa-remove").forEach(b=>b.addEventListener("click",async e=>{
+      e.stopPropagation(); const i=Number(b.dataset.remove);
+      if(S.plSource && isFavPlaylist(S.plSource)){
+        const it=items[i]; if(it){ await toggleFav(it,false); return; }
+      } else if(S.plSource) await apiCall("playlistRemove",{ok:true},S.plSource,i);
+      else await apiCall("queueRemove",{ok:true},i);
+      await broadcastPlChange();
+    }));
+  }
   function showFPanel(k){
     if(k==="lyricsOn"){                            // 歌词显隐开关（中间区）
       const show=$("focusLyrics").hidden;
@@ -513,6 +636,7 @@
       if(btn) btn.classList.toggle("on",show);
       return;
     }
+    if(k==="lyricPick"){ openLyricPicker(); return; }   // 歌词选源弹窗（不切换侧栏）
     S.fpanel = (S.fpanel===k)?"":k;
     $("focusAside").hidden = !S.fpanel;
     document.querySelectorAll("#focusToggles button:not([data-fpanel='lyricsOn'])")
@@ -523,15 +647,7 @@
     const body=$("faBody");
     const t=S.track||{};
     if(k==="playlist"){
-      const items=(S.library&&S.library.titles&&S.library.titles.items)||[];
-      body.innerHTML=items.slice(0,80).map((it,i)=>{
-        const cur=String(it.id)===String(t.id);
-        const th=it._cover?`<img class="fa-thumb" src="${it._cover}" alt="">`:`<div class="fa-thumb"></div>`;
-        return `<div class="fa-row ${cur?"cur":""}" data-id="${esc(it.id)}"><span class="fa-n">${cur?'<b class="now-playing">▶</b>':String(i+1).padStart(2,"0")}</span>${th}<div class="fa-tx"><div class="fa-t">${esc(it.title||it._name)}</div><div class="fa-a">${esc(it.artist||"")}</div></div></div>`;
-      }).join("");
-      body.querySelectorAll(".fa-row").forEach(el=>el.addEventListener("click",()=>{
-        const it=items.find(x=>String(x.id)===el.dataset.id); if(it) playItem(it);
-      }));
+      renderFocusPlaylist();
     } else if(k==="info"){
       const sp=(S.audio&&S.audio.spec)||{};
       const vd=(S.audio&&S.audio.verdict)||{};
@@ -965,10 +1081,11 @@
     if(!now) S.favorites=S.favorites.filter(x=>x!==id);
     refreshFavUI();
     toast(now?("♥ 已收藏："+itemName(it,S.cat)):("已取消收藏："+itemName(it,S.cat)));
-    // 收藏会增减「♥ 收藏」列表曲目，刷新两处播放列表下拉以联动数量
-    loadPlaylists().then(()=>{
-      const lpd=$("lpdSelect");
-      if(lpd && $("libPlDrawer") && !$("libPlDrawer").hidden){ lpd.innerHTML=plOptions(S.playlists,true); lpd.value=S.lpdPid||""; }
+    // 收藏会增减「♥ 收藏」列表曲目，统一刷新所有播放列表视图与下拉
+    broadcastPlChange().then(()=>{
+      const lpd=$("lpdSelect"), pl=$("plSelect");
+      if(lpd) lpd.value=S.lpdPid||"";
+      if(pl) pl.value=S.plSource||"";
     });
   }
   function refreshFavUI(){
@@ -1024,10 +1141,10 @@
       e.stopPropagation(); const i=Number(b.dataset.remove);
       if(S.lpdPid && isFavPlaylist(S.lpdPid)){
         // 收藏列表内移除 = 取消收藏，走 toggleFav 以同步心形状态
-        const it=list[i]; if(it){ await toggleFav(it,false); }
+        const it=list[i]; if(it){ await toggleFav(it,false); return; }
       } else if(S.lpdPid) await apiCall("playlistRemove",{ok:true},S.lpdPid,i);
       else await apiCall("queueRemove",{ok:true},i);
-      refreshLpd();
+      await broadcastPlChange();
     }));
   }
   async function loadNamedThenPlay(pid, index){
@@ -1085,7 +1202,11 @@
   $("libPlClose").addEventListener("click",closeLibPlDrawer);
   $("libPlMask").addEventListener("click",closeLibPlDrawer);
   if($("lpdSelect")) $("lpdSelect").addEventListener("change",e=>{
-    S.lpdPid=e.target.value; refreshLpd();
+    S.lpdPid=e.target.value;
+    // 与播放器面板共享当前来源，保证两边选择一致
+    S.plSource=S.lpdPid; const pl=$("plSelect"); if(pl) pl.value=S.plSource;
+    refreshLpd();
+    if(S.focus && S.fpanel==="playlist") renderFocusPlaylist();
   });
   if($("lpdRefresh")) $("lpdRefresh").addEventListener("click",async()=>{
     await loadPlaylists(); refreshLpd(); toast("已刷新");
@@ -1313,12 +1434,12 @@
   async function loadPlaylists(){
     const r=await apiCall("getPlaylists",{items:window.__PL__||[]});
     const items=(r&&r.items)||[]; S.playlists=items;
-    const sel=$("plSelect");
-    if(sel){
-      const cur=sel.value;
-      sel.innerHTML=plOptions(items, true);
-      if(cur)sel.value=cur;
-    }
+    const opts=plOptions(items, true);
+    [["plSelect",S.plSource],["lpdSelect",S.lpdPid]].forEach(([id,keep])=>{
+      const sel=$(id); if(!sel)return;
+      sel.innerHTML=opts;
+      sel.value=(keep!==undefined && keep!==null)?String(keep):"";
+    });
     return items;
   }
   async function loadQueue(){
@@ -1351,7 +1472,8 @@
     }));
     box.querySelectorAll(".pl-remove").forEach(b=>b.addEventListener("click",async e=>{
       e.stopPropagation();
-      await apiCall("queueRemove",{ok:true},Number(b.dataset.remove)); loadQueue();
+      await apiCall("queueRemove",{ok:true},Number(b.dataset.remove));
+      await broadcastPlChange();
     }));
   }
   // 播放列表心形点击委托（覆盖队列与命名列表两种渲染）
@@ -1393,9 +1515,9 @@
     box.querySelectorAll(".pl-remove").forEach(b=>b.addEventListener("click",async e=>{
       e.stopPropagation(); const i=Number(b.dataset.remove);
       if(isFavPlaylist(pid)){
-        const it=items[i]; if(it){ await toggleFav(it,false); }
+        const it=items[i]; if(it){ await toggleFav(it,false); return; }
       } else await apiCall("playlistRemove",{ok:true},pid,i);
-      renderPlTracks(pid); loadPlaylists();
+      await broadcastPlChange();
     }));
   }
   if($("plRefresh")) $("plRefresh").addEventListener("click",async()=>{
@@ -1405,7 +1527,10 @@
   });
   if($("plSelect")) $("plSelect").addEventListener("change",async e=>{
     S.plSource=e.target.value;
+    // 与音乐库抽屉共享当前来源，保证两边选择一致
+    S.lpdPid=S.plSource; const lpd=$("lpdSelect"); if(lpd) lpd.value=S.lpdPid;
     if(S.plSource) renderPlTracks(S.plSource); else loadQueue();
+    if(S.focus && S.fpanel==="playlist") renderFocusPlaylist();
   });
   if($("plNew")) $("plNew").addEventListener("click",async()=>{
     const n=prompt("新建播放列表名称：","我的播放列表");
@@ -1546,6 +1671,7 @@
     setInterval(()=>{ if(S.playing){ S.time+=1; if(S.time>S.duration)S.time=0; updateTimeUI(); } },1000);
     // 增强功能初始化
     loadPlaylists(); loadQueue(); loadFavorites();
+    initLyricPicker();
     setTimeout(pollStatus, 300);
     setTimeout(updateConnBadge, 500);
     setInterval(pollStatus, 1000);

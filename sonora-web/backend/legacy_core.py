@@ -32,6 +32,7 @@ import io
 import sys
 import json
 import html
+import base64
 import time
 import shlex
 import shutil
@@ -4922,6 +4923,201 @@ def lyrics_netease(title, artist, timeout=8):
     d2 = json.loads(http_request(u2, headers=hdr, timeout=timeout).decode("utf-8", "replace"))
     t = (d2.get("lrc") or {}).get("lyric") or ""
     return (t, "网易云音乐（在线）") if t else ("", "")
+
+def lyrics_netease_candidates(title, artist="", timeout=8):
+    """网易云音乐：返回 [(歌词, 来源标签), ...]（最多前 4 首匹配）。"""
+    out = []
+    q = (str(title) + " " + str(artist)).strip()
+    hdr = {"Referer": "https://music.163.com"}
+    try:
+        u = "https://music.163.com/api/search/get?" + urllib.parse.urlencode(
+            {"s": q, "type": 1, "offset": 0, "limit": 6})
+        d = json.loads(http_request(u, headers=hdr, timeout=timeout).decode("utf-8", "replace"))
+        songs = ((d.get("result") or {}).get("songs") or [])
+        for s in songs[:4]:
+            sid = s.get("id")
+            if not sid:
+                continue
+            try:
+                u2 = "https://music.163.com/api/song/lyric?" + urllib.parse.urlencode(
+                    {"id": sid, "lv": 1, "kv": 1, "tv": -1})
+                d2 = json.loads(http_request(u2, headers=hdr, timeout=timeout).decode("utf-8", "replace"))
+                t = (d2.get("lrc") or {}).get("lyric") or ""
+                if t:
+                    nm = s.get("name") or ""
+                    ars = ",".join(a.get("name", "") for a in (s.get("artists") or [])[:2])
+                    label = "网易云音乐" + (" · " + nm + ("/" + ars if ars else "") if nm else "")
+                    out.append((t, label))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def lyrics_qqmusic_candidates(title, artist="", timeout=8):
+    """QQ 音乐：搜索 + 歌词接口，返回 [(歌词, 来源标签), ...]。"""
+    out = []
+    q = (str(title) + " " + str(artist)).strip()
+    hdr = {"Referer": "https://y.qq.com/", "User-Agent": UA}
+    try:
+        u = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?" + urllib.parse.urlencode(
+            {"w": q, "format": "json", "n": 8, "p": 1})
+        d = json.loads(http_request(u, headers=hdr, timeout=timeout).decode("utf-8", "replace"))
+        songs = ((d.get("data") or {}).get("song") or {}).get("list") or []
+        for s in songs[:5]:
+            mid = s.get("songmid")
+            if not mid:
+                continue
+            try:
+                u2 = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?" + urllib.parse.urlencode(
+                    {"songmid": mid, "format": "json", "nobase64": 1})
+                d2 = json.loads(http_request(u2, headers=hdr, timeout=timeout).decode("utf-8", "replace"))
+                t = d2.get("lyric") or ""
+                if isinstance(t, dict):
+                    t = ""
+                if t:
+                    nm = s.get("songname") or ""
+                    sg = ",".join(x.get("name", "") for x in (s.get("singer") or [])[:2])
+                    label = "QQ 音乐" + (" · " + nm + ("/" + sg if sg else "") if nm else "")
+                    out.append((t, label))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def lyrics_kugou_candidates(title, artist="", duration=0, timeout=8):
+    """酷狗音乐：搜索 + 歌词 candidates + download，返回 [(歌词, 来源标签), ...]。"""
+    out = []
+    q = (str(title) + " " + str(artist)).strip()
+    try:
+        u = "https://songsearch.kugou.com/song_search_v2?" + urllib.parse.urlencode(
+            {"keyword": q, "page": 1, "pagesize": 8})
+        d = json.loads(http_request(u, timeout=timeout).decode("utf-8", "replace"))
+        lst = ((d.get("data") or {}).get("lists") or [])
+        for s in lst[:5]:
+            fh = s.get("FileHash")
+            if not fh:
+                continue
+            try:
+                p = {"ver": 1, "man": "yes", "client": "pc", "keyword": q, "hash": fh}
+                dur = int(s.get("Duration") or 0)
+                if dur:
+                    p["duration"] = dur
+                u2 = "https://lyrics.kugou.com/search?" + urllib.parse.urlencode(p)
+                d2 = json.loads(http_request(u2, timeout=timeout).decode("utf-8", "replace"))
+                for cd in (d2.get("candidates") or [])[:2]:
+                    cid, ak = cd.get("id"), cd.get("accesskey")
+                    if not cid or not ak:
+                        continue
+                    try:
+                        u3 = "https://lyrics.kugou.com/download?" + urllib.parse.urlencode(
+                            {"ver": 1, "client": "pc", "id": cid, "accesskey": ak,
+                             "format": "lrc", "charset": "utf8"})
+                        d3 = json.loads(http_request(u3, timeout=timeout).decode("utf-8", "replace"))
+                        content = d3.get("content") or ""
+                        if content:
+                            try:
+                                content = base64.b64decode(content).decode("utf-8", "replace")
+                            except Exception:
+                                pass
+                            nm = s.get("SongName") or ""
+                            label = "酷狗音乐" + (" · " + nm if nm else "")
+                            out.append((content, label))
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def lyrics_collect(title, artist="", album="", duration=0):
+    """汇总所有在线歌词源候选，供前端手动选择。
+    返回 [{"source":..., "text":..., "timed":bool}, ...]，带时间轴的优先。"""
+    title = str(title or "").strip()
+    if not title:
+        return []
+    out = []
+    seen = set()
+
+    def add(text, source):
+        text = (text or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        out.append({"source": source, "text": text,
+                    "timed": bool(parse_lrc(text).get("timed"))})
+
+    for fn, args in (
+        (lyrics_netease_candidates, (title, artist)),
+        (lyrics_qqmusic_candidates, (title, artist)),
+        (lyrics_kugou_candidates, (title, artist, duration)),
+        (lyrics_lrclib_candidates, (title, artist, album, duration)),
+    ):
+        try:
+            for t, s in fn(*args):
+                add(t, s)
+        except Exception:
+            pass
+    out.sort(key=lambda x: (not x["timed"],))
+    return out
+
+
+LYRIC_CHOICE_PATH = os.path.join(CONFIG_DIR, "lyric_choices.json")
+
+
+def lyric_choice_get(key):
+    try:
+        with open(LYRIC_CHOICE_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get(key) if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
+def lyric_choice_set(key, source, text):
+    try:
+        d = {}
+        if os.path.exists(LYRIC_CHOICE_PATH):
+            with open(LYRIC_CHOICE_PATH, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if not isinstance(d, dict):
+                d = {}
+        d[key] = {"source": source, "text": text}
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(LYRIC_CHOICE_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.chmod(LYRIC_CHOICE_PATH, 0o600)
+        return True
+    except Exception:
+        return False
+
+
+def lyric_choice_clear(key):
+    try:
+        if not os.path.exists(LYRIC_CHOICE_PATH):
+            return True
+        with open(LYRIC_CHOICE_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and key in d:
+            d.pop(key, None)
+            with open(LYRIC_CHOICE_PATH, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def lyric_choice_key(track):
+    t = str((track or {}).get("title") or "").strip()
+    a = str((track or {}).get("artist") or "").strip()
+    tid = str((track or {}).get("id") or "").strip()
+    return (tid + "|" if tid else "") + t + "|" + a
+
 
 def lyrics_online(title, artist="", album="", duration=0, force=False):
     """不依赖 LMS 插件与本地挂载：带时间轴歌词优先，结果本地缓存。"""
