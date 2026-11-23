@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.14"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.15"}
 
 
 @_wrap
@@ -365,6 +365,141 @@ def setLyricChoice(track, source, text):
 def clearLyricChoice(track):
     key = c.lyric_choice_key(track if isinstance(track, dict) else {})
     return {"ok": c.lyric_choice_clear(key)}
+
+
+# ---- 艺术家头像（抓取 + 用户上传覆盖，本地持久化）----
+_ARTIST_IMG_PATH = os.path.join(os.path.expanduser("~/.squeezelite_gui"), "artist_images.json")
+_ARTIST_IMG_CACHE = {"data": None}
+
+
+def _artist_img_load():
+    if _ARTIST_IMG_CACHE["data"] is not None:
+        return _ARTIST_IMG_CACHE["data"]
+    d = {}
+    try:
+        with open(_ARTIST_IMG_PATH, "r", encoding="utf-8") as f:
+            v = json.load(f)
+            if isinstance(v, dict):
+                d = v
+    except Exception:
+        pass
+    _ARTIST_IMG_CACHE["data"] = d
+    return d
+
+
+def _artist_img_save(d):
+    _ARTIST_IMG_CACHE["data"] = d
+    try:
+        os.makedirs(os.path.dirname(_ARTIST_IMG_PATH), exist_ok=True)
+        tmp = _ARTIST_IMG_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.replace(tmp, _ARTIST_IMG_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def _img_to_data_uri(raw, ctype="image/jpeg"):
+    """原始字节 -> data URI（限量 900KB，过大则拒绝）。"""
+    if not raw or len(raw) > 900 * 1024:
+        return ""
+    if not ctype.startswith("image/"):
+        ctype = "image/jpeg"
+    return "data:%s;base64,%s" % (ctype, base64.b64encode(raw).decode("ascii"))
+
+
+def _fetch_artist_image(artist):
+    """返回 (data_uri, source_label)。依次尝试 Wikipedia REST / Last.fm 页面 og:image。"""
+    artist = str(artist or "").strip()
+    if not artist:
+        return "", ""
+    # 1) Wikipedia REST summary thumbnail（免费、无需 key）
+    try:
+        import urllib.parse
+        q = urllib.parse.quote(artist.replace(" ", "_"), safe="")
+        url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + q
+        raw = c.http_request(url, timeout=8)
+        obj = json.loads(raw.decode("utf-8", "replace"))
+        thumb = (obj.get("thumbnail") or {}).get("source") or ""
+        if thumb:
+            img = c.http_request(thumb, timeout=10)
+            uri = _img_to_data_uri(img)
+            if uri:
+                return uri, "维基百科"
+    except Exception:
+        pass
+    # 2) Last.fm 音乐人页面 og:image（公开页面，无需 key）
+    try:
+        import urllib.parse
+        q = urllib.parse.quote(artist.replace(" ", "+"), safe="")
+        html = c.http_get("https://www.last.fm/music/" + q, timeout=8)
+        m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+        if not m:
+            m = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', html, re.I)
+        if m:
+            imgurl = m.group(1).replace("&amp;", "&")
+            img = c.http_request(imgurl, timeout=10)
+            uri = _img_to_data_uri(img)
+            if uri:
+                return uri, "Last.fm"
+    except Exception:
+        pass
+    return "", ""
+
+
+@_wrap
+def getArtistImage(artist, autoFetch=True):
+    """获取艺术家头像：用户上传优先，其次缓存，最后按 autoFetch 在线抓取。"""
+    artist = str(artist or "").strip()
+    if not artist:
+        return {"image": "", "source": "", "custom": False}
+    d = _artist_img_load()
+    rec = d.get(artist) or {}
+    if rec.get("custom") and rec.get("image"):
+        return {"image": rec["image"], "source": rec.get("source") or "自定义", "custom": True}
+    if rec.get("image"):
+        return {"image": rec["image"], "source": rec.get("source") or "", "custom": False}
+    if autoFetch:
+        uri, src = _fetch_artist_image(artist)
+        if uri:
+            d[artist] = {"image": uri, "source": src, "custom": False}
+            _artist_img_save(d)
+            return {"image": uri, "source": src, "custom": False}
+    return {"image": "", "source": "", "custom": False}
+
+
+@_wrap
+def setArtistImage(artist, dataUri):
+    """用户上传/修改艺术家头像（data URI 字符串，持久化覆盖）。"""
+    artist = str(artist or "").strip()
+    dataUri = str(dataUri or "").strip()
+    if not artist:
+        return {"ok": False, "error": "缺少艺术家名"}
+    if not dataUri.startswith("data:image/"):
+        return {"ok": False, "error": "图片格式无效"}
+    if len(dataUri) > 1_300_000:
+        return {"ok": False, "error": "图片过大（上限约 900KB）"}
+    d = _artist_img_load()
+    d[artist] = {"image": dataUri, "source": "自定义", "custom": True}
+    if not _artist_img_save(d):
+        return {"ok": False, "error": "头像写入失败"}
+    return {"ok": True, "image": dataUri, "source": "自定义", "custom": True}
+
+
+@_wrap
+def clearArtistImage(artist):
+    """清除用户自定义头像，恢复自动抓取。"""
+    artist = str(artist or "").strip()
+    d = _artist_img_load()
+    rec = d.get(artist)
+    if isinstance(rec, dict):
+        rec.pop("custom", None)
+        rec.pop("image", None)
+        if not rec:
+            d.pop(artist, None)
+    _artist_img_save(d)
+    return {"ok": True}
 
 
 @_wrap
@@ -1734,6 +1869,9 @@ class BridgeAPI:
     def setLyricChoice(self, track, source, text): return setLyricChoice(track, source, text)
     def clearLyricChoice(self, track): return clearLyricChoice(track)
     def setFocusChrome(self, on): return setFocusChrome(on)
+    def getArtistImage(self, artist, autoFetch=True): return getArtistImage(artist, autoFetch)
+    def setArtistImage(self, artist, dataUri): return setArtistImage(artist, dataUri)
+    def clearArtistImage(self, artist): return clearArtistImage(artist)
     def getBio(self, artist, album=""): return getBio(artist, album)
     def getAudio(self, track): return getAudio(track)
     def playControl(self, cmd): return playControl(cmd)

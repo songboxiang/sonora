@@ -15,6 +15,7 @@
     playMode: "seq",       // seq | loop | one | shuffle
     volume: 60,
     plSource: "",          // 播放列表面板当前来源：""=当前队列 或播放列表ID
+    nowPlayingPid: "",     // 当前正在播放的本地歌单ID（打开抽屉时优先显示）
     playlists: [],
     queue: [],
     favorites: [],       // 已收藏曲目 id 列表
@@ -121,13 +122,88 @@
     });
     return arr;
   }
+  // ---- 流派封面：每个流派专属渐变 + 纯矢量图形（不依赖 emoji 字体）----
+  const GENRE_STYLE = {
+    "none":       ["#3a3f4a","#5a6272","note"],
+    "anime":      ["#ff6a9a","#ffb36b","sakura"],
+    "citypop":    ["#ff7eb3","#5b8cff","skyline"],
+    "classical":  ["#8a6cff","#d0b3ff","piano"],
+    "folk":       ["#7bb661","#c9d96b","guitar"],
+    "jpop":       ["#ff5f8f","#ffc371","mic"],
+    "jazz":       ["#c1512f","#e8a13a","sax"],
+    "pop":        ["#ff6b6b","#ffa94d","headphone"],
+    "rock":       ["#c0392b","#e74c3c","bolt"],
+    "score":      ["#2c3e6b","#5b7fc7","clapper"],
+    "soulpop":    ["#8e44ad","#e067c0","vinyl"],
+    "soundtrack": ["#16a085","#48c9b0","film"]
+  };
+  // 流派名（中/英/别名）归一到风格 key
+  const GENRE_ALIAS = {
+    "无音乐曲风":"none","未知":"none","none":"none",
+    "Anime":"anime","动漫":"anime","动画":"anime",
+    "City Pop":"citypop","Citypop":"citypop","城市流行":"citypop","电子":"citypop","Electro":"citypop","Electronic":"citypop",
+    "Classical":"classical","古典":"classical","古典音乐":"classical",
+    "Folk":"folk","民谣":"folk","民俗":"folk",
+    "J-Pop":"jpop","Jpop":"jpop","JPOP":"jpop","日本流行":"jpop",
+    "Jazz, Vocal Jazz":"jazz","Jazz":"jazz","爵士":"jazz","Vocal Jazz":"jazz",
+    "POP":"pop","Pop":"pop","流行":"pop",
+    "Rock":"rock","摇滚":"rock","摇滚乐":"rock",
+    "Score":"score","配乐":"score","原声配乐":"score",
+    "Soul-Pop":"soulpop","Soul Pop":"soulpop","灵魂乐":"soulpop",
+    "Soundtrack":"soundtrack","原声":"soundtrack","电影原声":"soundtrack"
+  };
+  // 每个图形是一段 SVG 片段（坐标系 0 0 240 240，统一白色）
+  const GENRE_ICON = {
+    note:      '<path d="M150 66v74a22 22 0 1 1-15-21V78l-52 11v60a22 22 0 1 1-15-21V74z"/>',
+    sakura:    '<g><ellipse cx="120" cy="84" rx="19" ry="32"/><ellipse cx="120" cy="84" rx="19" ry="32" transform="rotate(72 120 120)"/><ellipse cx="120" cy="84" rx="19" ry="32" transform="rotate(144 120 120)"/><ellipse cx="120" cy="84" rx="19" ry="32" transform="rotate(216 120 120)"/><ellipse cx="120" cy="84" rx="19" ry="32" transform="rotate(288 120 120)"/><circle cx="120" cy="120" r="13" fill="rgba(0,0,0,.25)" stroke="none"/></g>',
+    skyline:   '<circle cx="120" cy="104" r="40" opacity=".45"/><g stroke="none"><rect x="66" y="126" width="22" height="52"/><rect x="94" y="108" width="26" height="70"/><rect x="126" y="120" width="22" height="58"/><rect x="154" y="136" width="20" height="42"/></g><g fill="rgba(0,0,0,.25)" stroke="none"><rect x="100" y="116" width="6" height="8"/><rect x="112" y="116" width="6" height="8"/><rect x="100" y="132" width="6" height="8"/><rect x="112" y="132" width="6" height="8"/></g>',
+    piano:     '<g stroke="none"><rect x="66" y="94" width="108" height="58" rx="4"/><g fill="rgba(0,0,0,.35)"><rect x="84" y="94" width="11" height="34"/><rect x="104" y="94" width="11" height="34"/><rect x="138" y="94" width="11" height="34"/><rect x="158" y="94" width="11" height="34"/></g></g>',
+    guitar:    '<g stroke="none"><circle cx="98" cy="150" r="29"/><circle cx="98" cy="116" r="20"/><rect x="116" y="66" width="13" height="72" rx="3" transform="rotate(32 122 102)"/><circle cx="104" cy="134" r="9" fill="rgba(0,0,0,.3)"/></g><path d="M112 74l34 22" stroke="rgba(255,255,255,.9)" stroke-width="2" fill="none"/>',
+    mic:       '<g stroke="none"><rect x="105" y="70" width="30" height="58" rx="15"/><path d="M90 118a30 30 0 0 0 60 0" fill="none" stroke="rgba(255,255,255,.92)" stroke-width="7"/><rect x="116" y="146" width="8" height="28" rx="3"/><rect x="100" y="172" width="40" height="6" rx="3"/></g>',
+    sax:       '<path d="M150 64q-34 8-38 44v22q0 22-24 28" fill="none" stroke="rgba(255,255,255,.95)" stroke-width="14" stroke-linecap="round"/><circle cx="86" cy="160" r="16" fill="rgba(255,255,255,.9)" stroke="none"/><circle cx="150" cy="64" r="9" fill="rgba(255,255,255,.9)" stroke="none"/>',
+    headphone: '<path d="M78 132v-14a42 42 0 0 1 84 0v14" fill="none" stroke="rgba(255,255,255,.92)" stroke-width="11"/><g stroke="none"><rect x="66" y="126" width="24" height="44" rx="10"/><rect x="150" y="126" width="24" height="44" rx="10"/></g>',
+    bolt:      '<polygon points="140,58 92,126 120,126 104,186 158,108 130,108" stroke="none"/>',
+    clapper:   '<g stroke="none"><rect x="68" y="106" width="104" height="62" rx="4"/><path d="M68 106l104-22v18L68 124z" fill="rgba(0,0,0,.3)"/><g fill="rgba(255,255,255,.55)"><rect x="80" y="98" width="14" height="10" transform="skewX(-12)"/><rect x="108" y="92" width="14" height="10" transform="skewX(-12)"/><rect x="136" y="86" width="14" height="10" transform="skewX(-12)"/></g></g>',
+    vinyl:     '<g stroke="none"><circle cx="120" cy="120" r="54"/><circle cx="120" cy="120" r="34" fill="rgba(0,0,0,.22)"/><circle cx="120" cy="120" r="14"/><circle cx="120" cy="120" r="5" fill="rgba(0,0,0,.3)"/></g>',
+    film:      '<g stroke="none"><rect x="66" y="92" width="108" height="56" rx="4"/><g fill="rgba(0,0,0,.3)"><rect x="72" y="97" width="10" height="9"/><rect x="96" y="97" width="10" height="9"/><rect x="120" y="97" width="10" height="9"/><rect x="144" y="97" width="10" height="9"/><rect x="72" y="134" width="10" height="9"/><rect x="96" y="134" width="10" height="9"/><rect x="120" y="134" width="10" height="9"/><rect x="144" y="134" width="10" height="9"/></g><rect x="90" y="108" width="60" height="26" rx="3" fill="rgba(255,255,255,.35)"/></g>'
+  };
+  function genreArt(name){
+    name=String(name||"");
+    const key=GENRE_ALIAS[name] || (GENRE_STYLE[name]?name:null);
+    let c1,c2,icon;
+    if(key && GENRE_STYLE[key]){ [c1,c2,icon]=GENRE_STYLE[key]; }
+    else {
+      let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))>>>0;
+      const hue=h%360;
+      c1=`hsl(${hue},42%,32%)`; c2=`hsl(${(hue+40)%360},55%,52%)`; icon="note";
+    }
+    const glyph=GENRE_ICON[icon]||GENRE_ICON.note;
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs>
+<rect width="240" height="240" fill="url(#g)"/>
+<circle cx="120" cy="120" r="90" fill="rgba(255,255,255,.08)"/>
+<circle cx="120" cy="120" r="72" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="2"/>
+<g fill="rgba(255,255,255,.94)" stroke="rgba(255,255,255,.94)" stroke-linejoin="round">${glyph}</g>
+</svg>`;
+    return "data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);
+  }
+  function artistAvatar(artist){
+    const a=api.getArtistImage && S.artistAvatars && S.artistAvatars[artist];
+    return a||"";
+  }
   function thumbHtml(it,idx){
-    const cov=it._cover;
+    let cov=it._cover;
+    // 流派：专属 logo；艺术家：优先已抓取头像
+    if(S.cat==="genres" && !S.browseItems) cov=cov||genreArt(itemName(it,"genres"));
+    if(S.cat==="artists" && !S.browseItems) cov=cov||artistAvatar(itemName(it,"artists"));
     const cid=it.artwork_track_id||it.coverid||"";
     const inner=cov?`<img src="${cov}" alt="">`
       : cid?`<img class="lazy-cover" data-cid="${esc(cid)}" src="" alt="" style="opacity:0">`:`<span class="ph">♪</span>`;
     const idxHtml = S.view==="grid"?`<span class="idx">${String(idx).padStart(2,"0")}</span>`:"";
-    return `<div class="thumb">${inner}${idxHtml}</div>`;
+    // 艺术家卡片加头像设置小按钮
+    const artBtn=(S.cat==="artists" && !S.browseItems)
+      ? `<button class="artist-cover-btn" data-artist="${esc(itemName(it,"artists"))}" title="设置艺术家头像">⚙</button>` : "";
+    return `<div class="thumb">${inner}${idxHtml}${artBtn}</div>`;
   }
   // 异步补齐音乐库里没有 _cover 但有 coverid 的缩略图
   async function fillLazyCovers(){
@@ -195,6 +271,12 @@
     if(typeof crumbRender==="function") crumbRender();
     if(S.browseItems && $("libHint")) $("libHint").textContent="已展开曲目 · "+S.items.length+" 首";
     fillLazyCovers();
+    // 艺术家：绑定头像设置按钮 + 异步批量抓取缺失头像
+    grid.querySelectorAll(".artist-cover-btn").forEach(b=>b.addEventListener("click",async e=>{
+      e.stopPropagation();
+      await openArtistCoverModal(b.dataset.artist);
+    }));
+    if(S.cat==="artists" && !S.browseItems) ensureArtistAvatars();
   }
   function setAlphaActive(L){
     const bar=$("alphaBar"); if(!bar)return;
@@ -270,6 +352,7 @@
       coverid:it.artwork_track_id||it.coverid||"", duration:Number(it.duration)||346 };
   }
   async function playItem(it){
+    S.nowPlayingPid="";   // 从音乐库/队列直接播放：不再属于某个本地歌单
     S.track=trackFromItem(it);
     // 保留完整字段供音频/歌词解析
     for(const k of ("url","type","samplerate","samplesize","bitrate","filesize")){
@@ -450,12 +533,15 @@
   // 统一：播放列表数据发生增删改后，一次性同步所有视图（音乐库抽屉/播放器面板/专注侧栏）
   async function broadcastPlChange(){
     try{ await loadPlaylists(); }catch(e){}
-    refreshPlaylistPanel();
+    // 并行刷新所有曲目列表视图并等待完成，确保「数量」与「曲目」同步落地
+    const jobs=[];
+    if(S.plSource) jobs.push(renderPlTracks(S.plSource)); else jobs.push(loadQueue());
     // 音乐库抽屉若打开，按其当前来源刷新
     const dlg=$("libPlDrawer");
-    if(dlg && !dlg.hidden){ refreshLpd(); }
+    if(dlg && !dlg.hidden) jobs.push(refreshLpd());
     // 专注模式侧栏若正显示播放列表，用真实数据重绘
-    if(S.focus && S.fpanel==="playlist"){ renderFocusPlaylist(); }
+    if(S.focus && S.fpanel==="playlist") jobs.push(renderFocusPlaylist());
+    await Promise.all(jobs);
   }
   function buildPlaylist(){
     const items=(S.library&&S.library.titles&&S.library.titles.items)||[];
@@ -1151,6 +1237,7 @@
     const r=await apiCall("playlistTracks",{items:[]},pid);
     const items=(r&&r.items)||[];
     if(!items.length){ toast("列表为空"); return; }
+    S.nowPlayingPid=String(pid||"");   // 记住当前播放的歌单，打开音乐库抽屉时优先显示
     // 本地歌单：整单载入 LMS 队列并从此曲开始，队列有多首才能测试切歌
     const pl=(S.playlists||[]).find(x=>String(x.id)===String(pid));
     if(pl && pl.local){
@@ -1188,10 +1275,15 @@
   }
   async function openLibPlDrawer(){
     $("libPlDrawer").hidden=false; $("libPlMask").hidden=false;
-    S.lpdPid="";
     const sel=$("lpdSelect");
     await loadPlaylists();
-    if(sel){ sel.innerHTML=plOptions(S.playlists, true); sel.value=""; }
+    // 若正在播放本地歌单且该歌单仍存在，优先显示它；否则回退当前队列
+    let def="";
+    if(S.nowPlayingPid && (S.playlists||[]).some(p=>String(p.id)===String(S.nowPlayingPid))){
+      def=String(S.nowPlayingPid);
+    }
+    S.lpdPid=def;
+    if(sel){ sel.innerHTML=plOptions(S.playlists, true); sel.value=def; }
     refreshLpd();
   }
   function closeLibPlDrawer(){ $("libPlDrawer").hidden=true; $("libPlMask").hidden=true; }
@@ -1332,6 +1424,75 @@
   function refreshLibraryExtras(){ crumbRender(); }
 
   // ---- 右键上下文菜单 ----
+  // ---- 艺术家头像：批量抓取 + 设置弹窗 ----
+  async function ensureArtistAvatars(){
+    if(!api.getArtistImage) return;
+    S.artistAvatars=S.artistAvatars||{};
+    const names=[...new Set((S.items||[]).map(it=>itemName(it,"artists")).filter(Boolean))];
+    let changed=false;
+    for(const name of names.slice(0,40)){
+      if(S.artistAvatars[name]) continue;
+      try{
+        const r=await apiCall("getArtistImage",{image:"",source:"",custom:false},name,true);
+        if(r && r.image){ S.artistAvatars[name]=r.image; changed=true; }
+        else S.artistAvatars[name]="";
+      }catch(e){ S.artistAvatars[name]=""; }
+    }
+    if(changed) renderLibrary();
+  }
+  async function openArtistCoverModal(artist){
+    artist=String(artist||"").trim(); if(!artist)return;
+    if(!api.getArtistImage){ toast("当前环境不支持头像抓取"); return; }
+    const cur=await apiCall("getArtistImage",{image:"",source:"",custom:false},artist,false);
+    let html=`<div class="artist-cover-modal">
+      <div class="acm-preview">${cur&&cur.image?`<img src="${esc(cur.image)}" alt="">`:`<div class="acm-ph">♪</div>`}</div>
+      <div class="acm-info"><b>${esc(artist)}</b><div class="acm-src">${cur&&cur.source?esc(cur.source):"暂无头像"}</div></div>
+      <div class="acm-actions">
+        <button class="btn" id="acmFetch">↻ 重新抓取</button>
+        <label class="btn primary" for="acmUpload">⬆ 上传图片</label>
+        <input type="file" id="acmUpload" accept="image/*" hidden>
+        ${cur&&cur.custom?`<button class="btn" id="acmClear">恢复自动抓取</button>`:""}
+      </div>
+      <div class="acm-tip">抓取自维基百科 / Last.fm；抓不到时可上传本地图片（≤900KB）</div>
+    </div>`;
+    showGenericModal("设置艺术家头像 · "+artist, html);
+    $("acmFetch").addEventListener("click",async()=>{
+      const r=await apiCall("getArtistImage",{image:"",source:"",custom:false},artist,true);
+      if(r&&r.image){ S.artistAvatars[artist]=r.image; toast("已抓取："+(r.source||"在线")); openArtistCoverModal(artist); renderLibrary(); }
+      else toast("未抓取到头像，请上传图片");
+    });
+    $("acmUpload").addEventListener("change",async e=>{
+      const f=e.target.files&&e.target.files[0]; if(!f)return;
+      if(f.size>900*1024){ toast("图片过大，上限 900KB"); return; }
+      const reader=new FileReader();
+      reader.onload=async()=>{
+        const r=await apiCall("setArtistImage",{ok:false},artist,String(reader.result));
+        if(r&&r.ok){ S.artistAvatars[artist]=r.image; toast("头像已保存"); openArtistCoverModal(artist); renderLibrary(); }
+        else toast("保存失败："+((r&&r.error)||""));
+      };
+      reader.readAsDataURL(f);
+    });
+    const cl=$("acmClear");
+    if(cl) cl.addEventListener("click",async()=>{
+      await apiCall("clearArtistImage",{ok:true},artist);
+      delete S.artistAvatars[artist]; toast("已恢复自动抓取"); openArtistCoverModal(artist); renderLibrary();
+    });
+  }
+  function showGenericModal(title, bodyHtml){
+    let m=$("genericModal");
+    if(!m){
+      m=document.createElement("div"); m.className="modal-mask"; m.id="genericModal";
+      m.innerHTML=`<div class="modal-box"><div class="modal-head"><b id="genericModalTitle"></b><button id="genericModalClose">×</button></div><div class="modal-body" id="genericModalBody"></div></div>`;
+      document.body.appendChild(m);
+      $("genericModalClose").addEventListener("click",()=>m.hidden=true);
+      m.addEventListener("click",e=>{ if(e.target.id==="genericModal") m.hidden=true; });
+    }
+    $("genericModalTitle").textContent=title;
+    $("genericModalBody").innerHTML=bodyHtml;
+    const pv=$("genericModalBody").querySelector(".acm-preview img");
+    if(pv) pv.id="acmPreviewImg";
+    m.hidden=false;
+  }
   function openCtxMenu(e,it){
     S.ctxItem=it;
     const m=$("ctxMenu"); if(!m)return;
@@ -1405,7 +1566,7 @@
         const r=await apiCall("createPlaylist",{ok:true},n);
         if(r&&r.ok!==false){ const list=await loadPlaylists(); const found=list.find(x=>x.name===n);
           if(found){ await apiCall("playlistAdd",{ok:true},found.id,String(it.id||it.track_id||""),plMeta); }
-          $("plModal").hidden=true; toast(`已创建并加入：${n}`); loadPlaylists();
+          $("plModal").hidden=true; toast(`已创建并加入：${n}`); await broadcastPlChange();
         } else toast("创建失败");
       });
     } else {
@@ -1415,13 +1576,14 @@
       body.querySelectorAll(".pl-pick").forEach(b=>b.addEventListener("click",async()=>{
         const r=await apiCall("playlistAdd",{ok:true},b.dataset.id,String(it.id||it.track_id||""),plMeta);
         toast(r&&r.ok===false?"加入失败":"已加入播放列表"); $("plModal").hidden=true;
+        if(r&&r.ok!==false) await broadcastPlChange();   // 同步刷新三处曲目列表，不只是数量
       }));
       $("plCreateInline").addEventListener("click",async()=>{
         const n=$("plNewNameInline").value.trim(); if(!n)return;
         const r=await apiCall("createPlaylist",{ok:true},n);
         if(r&&r.ok!==false){ const list=await loadPlaylists(); const found=list.find(x=>x.name===n);
           if(found) await apiCall("playlistAdd",{ok:true},found.id,String(it.id||it.track_id||""),plMeta);
-          $("plModal").hidden=true; toast(`已创建并加入：${n}`); loadPlaylists();
+          $("plModal").hidden=true; toast(`已创建并加入：${n}`); await broadcastPlChange();
         } else toast("创建失败");
       });
     }
