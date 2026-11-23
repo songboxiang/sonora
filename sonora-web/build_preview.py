@@ -117,10 +117,10 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     getAudio:()=>Promise.resolve(window.__AUDIO__),
     getLyrics:()=>Promise.resolve(window.__LYRICS__),
     getLyricSources:()=>Promise.resolve({items:[
-      {source:'网易云音乐 · 晴天 / 周杰伦',timed:true,text:'[00:00.00]晴天\n[00:05.00]故事的小黄花\n[00:10.00]从出生那年就飘着'},
-      {source:'QQ 音乐 · 晴天',timed:true,text:'[00:00.00]晴天\n[00:06.00]故事的小黄花\n[00:12.00]从出生那年就飘着'},
-      {source:'酷狗音乐 · 晴天',timed:false,text:'故事的小黄花 从出生那年就飘着\n童年的荡秋千 随记忆一直晃到现在'},
-      {source:'LRCLIB（在线同步歌词）',timed:true,text:'[00:00.00]晴天 - 周杰伦\n[00:07.00]故事的小黄花'}
+      {source:'网易云音乐 · 晴天 / 周杰伦',timed:true,text:'[00:00.00]晴天\\n[00:05.00]故事的小黄花\\n[00:10.00]从出生那年就飘着'},
+      {source:'QQ 音乐 · 晴天',timed:true,text:'[00:00.00]晴天\\n[00:06.00]故事的小黄花\\n[00:12.00]从出生那年就飘着'},
+      {source:'酷狗音乐 · 晴天',timed:false,text:'故事的小黄花 从出生那年就飘着\\n童年的荡秋千 随记忆一直晃到现在'},
+      {source:'LRCLIB（在线同步歌词）',timed:true,text:'[00:00.00]晴天 - 周杰伦\\n[00:07.00]故事的小黄花'}
     ],current:''}),
     setLyricChoice:(tr,src,txt)=>Promise.resolve({ok:true,source:'手动选定 · '+src,text:txt,timed:txt.indexOf('[')>=0,lines:[]}),
     clearLyricChoice:()=>Promise.resolve({ok:true}),
