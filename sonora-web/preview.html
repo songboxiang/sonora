@@ -1474,6 +1474,9 @@ body.is-focus .focus-screen::before{ opacity:0 !important; }
   background:rgba(0,0,0,.45); border-radius:8px;
 }
 
+/* v2.0.18 过渡稳定版：音频可视化暂移除，隐藏相关 UI */
+.viz-layer, .viz-canvas, .viz-switch, .viz-status { display: none !important; }
+
 </style>
 </head>
 <body>
@@ -2113,6 +2116,8 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     track: null, time: 96, duration: 346, playing: true,
     crumbs: [],            // 下钻面包屑栈 [{label, cat, filters}]
     browseItems: null,     // 下钻结果（非空时替代 S.items 渲染）
+    _drillBusy: false,     // [v2.0.18] 下钻防重入：卡住期间连点不再堆积 crumb
+    _browseCache: {},       // [v2.0.18] 下钻结果缓存 key=filters.join("|")
     ctxItem: null,         // 右键目标条目
     playMode: "seq",       // seq | loop | one | shuffle
     volume: 60,
@@ -2312,13 +2317,18 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
   async function fillLazyCovers(){
     const els=Array.from(document.querySelectorAll("#libItems img.lazy-cover")).slice(0,120);
     if(!els.length || !api.getCover) return;
-    for(const el of els){
-      const cid=el.dataset.cid; if(!cid) continue;
-      try{
-        const data=await api.getCover({coverid:cid},96);
-        if(data){ el.src=data; el.style.opacity="1"; el.classList.remove("lazy-cover"); }
-        else { el.outerHTML=`<span class="ph">♪</span>`; }
-      }catch(e){ el.outerHTML=`<span class="ph">♪</span>`; }
+    // [v2.0.18] 并发分批（每批8张）加载封面，取代串行 await，显著缩短音乐库填充时间
+    const valid=els.filter(el=>el.dataset.cid);
+    for(let i=0;i<valid.length;i+=8){
+      const batch=valid.slice(i,i+8);
+      await Promise.all(batch.map(async el=>{
+        const cid=el.dataset.cid;
+        try{
+          const data=await api.getCover({coverid:cid},96);
+          if(data && el.isConnected){ el.src=data; el.style.opacity="1"; el.classList.remove("lazy-cover"); }
+          else if(el.isConnected){ el.outerHTML=`<span class="ph">♪</span>`; }
+        }catch(e){ if(el.isConnected) el.outerHTML=`<span class="ph">♪</span>`; }
+      }));
     }
   }
   function renderLibrary(){
@@ -2729,9 +2739,11 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
       // 抑制轮询覆盖：LMS seek 生效有延迟，2.5s 内不让 pollStatus 用旧 time 弹回
       S.seekingUntil=Date.now()+2500;
       S.time=pendingSec; updateTimeUI();
-      apiCall("setSeek",{ok:false,error:"播放器暂不可用"},pendingSec).then(r=>{
-        if(r&&r.ok===false){ toast("定位失败："+((r&&r.error)||"播放器暂不可用")); }
-      });
+      // [v2.0.18] seek 是尽力而为的高频命令：失败绝不弹窗打断用户。
+      // 本地时间轴已立即更新，若 LMS 未接受，下一轮 pollStatus 会自然校正回真实位置。
+      apiCall("setSeek",{ok:false},pendingSec).then(r=>{
+        if(!r || r.ok===false){ /* 静默：仅本地预览，等待状态轮询校正 */ }
+      }).catch(()=>{});
     };
     barEl.style.cursor="pointer";
     barEl.addEventListener("pointerdown",ev=>{
@@ -2969,7 +2981,8 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     apiCall("focusEnter",{},true).then(r=>{
       if(r&&r.ok===false){ apiCall("setFocusChrome",{},true); }  // 兜底：改标题栏色
     });
-    startVisualizer();     // 真实音频可视化
+    // [v2.0.18] 可视化已停用
+    // startVisualizer();
   }
   function closeFocus(){
     S.focus=false; $("focusScreen").hidden=true;
@@ -3707,20 +3720,34 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     document.querySelectorAll("#libCats button").forEach(x=>x.classList.toggle("on",x.dataset.cat===S.cat));
   }
   async function drillInto(it){
+    // [v2.0.18] 防重入：请求在途时忽略后续点击，杜绝连点堆积面包屑
+    if(S._drillBusy) return;
     const cat=S.cat;
-    const name=itemName(it,cat);
     const fkey=DRILL_FILTER[cat];
     const id=String(it.id||"");
     if(!fkey||!id){ toast("该条目不支持查看曲目"); return; }
     const filters=[fkey+":"+id];
-    const r=await apiCall("libBrowse",{items:[],total:0},"titles",0,500,filters);
-    const items=(r&&r.items)||[];
-    if(!items.length){ toast("该"+DRILL_LABEL[cat]+"下暂无曲目"); return; }
-    S.crumbs.push({label:name,cat:cat,filters:filters});
-    S.lastBrowse=items; S.browseItems=items;
-    $("libSearch").value=""; S.query="";
-    renderLibrary();
-    toast(`已展开 ${name} · ${items.length} 首`);
+    // [v2.0.18] 防止下钻到自身造成循环面包屑（同一 filter 已在栈中）
+    if(S.crumbs.some(c=>c.filters && c.filters.join("|")===filters.join("|"))) return;
+    S._drillBusy=true;
+    const name=itemName(it,cat);
+    try{
+      const key=filters.join("|");
+      let items=S._browseCache[key];
+      if(!items){
+        const r=await apiCall("libBrowse",{items:[],total:0},"titles",0,500,filters);
+        items=(r&&r.items)||[];
+        if(items.length) S._browseCache[key]=items;
+      }
+      if(!items.length){ toast("该"+DRILL_LABEL[cat]+"下暂无曲目"); return; }
+      S.crumbs.push({label:name,cat:cat,filters:filters});
+      S.lastBrowse=items; S.browseItems=items;
+      $("libSearch").value=""; S.query="";
+      renderLibrary();
+      toast(`已展开 ${name} · ${items.length} 首`);
+    } finally {
+      S._drillBusy=false;
+    }
   }
   // filtered() 支持下钻结果
   const _origFiltered=filtered;
@@ -4135,7 +4162,7 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
         }
       }catch(e){}
     }
-    if(api.getBio){ try{ S.bio=await api.getBio("大黒摩季","55 RED");}catch(e){} }
+    // [v2.0.18] 移除启动时硬编码抓取的歌手简介（按需加载，不再阻塞启动）
     if(window.__BIO__) S.bio=window.__BIO__;
 
     applyTheme((api.getConfig&&await api.getConfig().then(c=>c.theme).catch(()=>"dark"))||"dark");
@@ -4152,7 +4179,8 @@ window.__CHANGELOG__ = {items:[],source:'preview'};
     // 增强功能初始化
     loadPlaylists(); loadQueue(); loadFavorites();
     initLyricPicker();
-    initViz();
+    // [v2.0.18] 音频可视化暂移除（本地音频代理在部分环境拖慢启动/切歌，待 Flutter 重构）
+    // initViz();
     setTimeout(pollStatus, 300);
     setTimeout(updateConnBadge, 500);
     setInterval(pollStatus, 1000);

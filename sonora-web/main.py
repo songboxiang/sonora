@@ -48,7 +48,7 @@ _probe_bundled_squeezelite()
 import webview
 from api import api as bridge_api
 
-VERSION = "2.0.17"
+VERSION = "2.0.18"
 
 _STOPPED = {"done": False}
 

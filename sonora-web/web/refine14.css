@@ -1,0 +1,2 @@
+/* v2.0.18 过渡稳定版：音频可视化暂移除，隐藏相关 UI */
+.viz-layer, .viz-canvas, .viz-switch, .viz-status { display: none !important; }

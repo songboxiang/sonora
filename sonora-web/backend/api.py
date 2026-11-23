@@ -47,7 +47,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.17"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.18"}
 
 
 @_wrap
@@ -852,12 +852,10 @@ def playControl(cmd):
 def libBrowse(mode="albums", start=0, count=50, filters=None, query=""):
     items, total = c.lib_browse(CFG, str(mode), int(start), int(count),
                                 str(query or ""), filters or [])
-    # 与 getLibrary 一致：给条目注入缩略封面，让下钻曲目/艺术家/流派也有封面
+    # [v2.0.18] 不再逐条预抓封面（500条×3次×4秒=进专辑卡几十秒的元凶）。
+    # 封面交给前端 fillLazyCovers() 按需并发加载；这里只返回纯元数据。
     for it in items:
-        cid = c.lib_cover_id(it) if hasattr(c, "lib_cover_id") else (
-            it.get("artwork_track_id") or it.get("coverid") or "")
-        it["_cover"] = _lib_thumb(cid) if cid else None
-        # 保留完整字段（含 url/type/samplerate 等），供音频信息与歌词使用
+        it["_cover"] = None
     return {"items": items, "total": total}
 
 
@@ -935,13 +933,10 @@ def getLibrary(limit=120):
             items, total = c.lib_browse(CFG, mode, 0, int(limit))
         except Exception:
             items, total = [], 0
+        # [v2.0.18] 不再在后端逐张预抓封面（120张×最多3次×4秒超时=启动卡几十秒）。
+        # 封面交给前端 fillLazyCovers() 按需加载，后端 getLibrary 只返回纯元数据。
         for it in items:
             it["_cover"] = None
-        if mode in ("albums", "titles"):
-            for it in items:
-                cid = it.get("artwork_track_id") or it.get("coverid") or ""
-                if cid:
-                    it["_cover"] = _lib_thumb(cid)
         out[mode] = {"items": items, "total": total}
     _LIB_CACHE["data"] = out
     _LIB_CACHE["ts"] = now
