@@ -1,0 +1,51 @@
+/* ============================================================
+   refine12.css — v2.0.16 真机三项修复
+   1) 专注模式进入系统全屏后，移除旧的安全区下移（全屏已无原生标题栏）
+   2) 进度条：用透明覆盖层扩大拖拽热区（不受 overflow:hidden 裁切）
+   3) 歌词自动滚动的平滑过渡
+   ============================================================ */
+
+/* ---- #1 全屏专注：取消 v2.0.14 的标题栏安全区下移 ---- */
+body.is-focus .focus-screen{ padding-top:0 !important; }
+body.is-focus .focus-screen .focus-top{ padding-top:8px !important; }
+/* 全屏后顶部遮挡条不再需要（保留一层极淡渐变做视觉过渡即可） */
+body.is-focus .focus-screen::before{ opacity:0 !important; }
+
+/* ---- #2 进度条拖拽热区 ---- */
+/* 每个进度条容器 ::after 透明覆盖层，向上下扩展命中区；
+   容器本身 overflow:hidden 会裁子元素，但 ::after 定位在 padding box 外仍可命中，
+   关键是给容器 position:relative + overflow:visible（视觉条用内部 i 的 border-radius 保持） */
+.mini-progress,
+.player-progress .pbar,
+.focus-pbar{
+  overflow:visible !important;   /* 让扩展热区不被裁切 */
+  cursor:pointer;
+  touch-action:none;             /* 允许 pointer 拖拽，不被滚动手势抢走 */
+}
+/* 视觉条圆角（去掉 overflow 后由 i 自己收口） */
+.mini-progress i,
+.player-progress .pbar i,
+.focus-pbar i{ border-radius:99px; }
+/* 隐藏 refine7 旧的热区伪元素（改用 ::after 覆盖层，避免重复） */
+.mini-progress::before,
+.player-progress .pbar::before,
+.focus-pbar::before{ display:none !important; }
+/* 新的透明热区覆盖层：上下各扩 11px，总命中高度约 26px */
+.mini-progress::after,
+.player-progress .pbar::after,
+.focus-pbar::after{
+  content:""; position:absolute;
+  left:0; right:0; top:-11px; bottom:-11px;
+  z-index:5; cursor:pointer;
+}
+/* 拖拽中：禁用 fill 宽度过渡，跟手无延迟 */
+.mini-progress.seeking i,
+.player-progress .pbar.seeking i,
+.focus-pbar.seeking i{ transition:none !important; }
+/* 拖拽中高亮轨道，给出反馈 */
+.player-progress .pbar.seeking{ box-shadow:0 0 0 2px rgba(124,199,166,.35); }
+.focus-pbar.seeking{ box-shadow:0 0 0 2px rgba(124,199,166,.35); }
+
+/* ---- #3 歌词滚动：容器平滑滚动已在 JS 用 scrollTo 实现，这里补齐溢出与 padding ---- */
+#lyricsBox{ scroll-behavior:smooth; }
+.focus-lyrics{ scroll-behavior:smooth; }

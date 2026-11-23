@@ -5,6 +5,24 @@
 的 bridge 标记，并打附注标签 `vX.Y.Z`。
 
 
+## v2.0.16 (2026-11-23) — 专注漏边根治 + 歌词自动滚动 + 进度条拖拽
+
+- **专注模式顶部漏边（根治）**：此前 v2.0.13/14 靠 pyobjc 动态改原生标题栏颜色，
+  在 Linux 开发环境无法验证、真机上 `setTitlebarAppearsTransparent` 又没配合内容铺满，
+  反复修反复漏。现改用 pywebview 官方 `Window.toggle_fullscreen()`：进入专注模式直接
+  进系统全屏，原生标题栏（含红黄绿按钮那条）彻底消失，退出恢复。新增后端
+  `setFullscreen(on)`，前端 openFocus/closeFocus 调用；`setFocusChrome` 降级为兜底。
+  refine12.css 在全屏时取消旧的安全区下移。
+- **歌词自动滚动**：此前只有高亮、不滚动，且仅专注模式调用了 scrollIntoView。
+  现 `updateTimeUI` 在歌词行变化时才滚动（避免每秒轮询抖动），播放器主页面
+  `#lyricsBox` 与专注模式 `.focus-lyrics` 都滚；用手动计算 scrollTop 的
+  `scrollLyricIntoView()` 替代 WKWebView 下不稳的 scrollIntoView；换曲时重置行号强制归位。
+- **进度条拖拽定位**：此前热区伪元素被 `overflow:hidden` 裁切（4-7px 点不中），且
+  pointermove 每次都发 seek（海量请求）、直接 api.setSeek 失败被吞。现用 ::after 透明
+  覆盖层把命中区扩到约 26px（refine12.css），拖拽中只更新视觉、松手才发一次
+  `apiCall("setSeek")`，失败有提示；延长轮询抑制窗到 2.5s 防时间弹回。
+- CSS 内联列表新增 refine12.css（count=14）。
+
 ## v2.0.15 (2026-11-23) — 曲目即时同步 + 抽屉默认歌单 + 艺术家头像 + 流派封面 + app图标
 
 - **播放列表曲目即时同步**：加入歌单后原先只更新了下拉里的曲目数量，三处曲目

@@ -16,6 +16,7 @@
     volume: 60,
     plSource: "",          // 播放列表面板当前来源：""=当前队列 或播放列表ID
     nowPlayingPid: "",     // 当前正在播放的本地歌单ID（打开抽屉时优先显示）
+    lyricCurIdx: -2,       // 上次歌词高亮行，变化才滚动（-2 确保首次强制滚）
     playlists: [],
     queue: [],
     favorites: [],       // 已收藏曲目 id 列表
@@ -519,6 +520,7 @@
     const lsrc=(S.lyrics&&S.lyrics.source)||"";
     if(S.lyricChoiceSrc!==lsrc) S.lyricChoiceSrc=lsrc;
     const tag=$("lyricSrcTag"); if(tag) tag.textContent=lsrc?("· "+lsrc):"";
+    S.lyricCurIdx=-2;   // 歌词内容可能已换，强制下次 updateTimeUI 重新定位并滚动
     setHTML($("lyricsBox"), lines.length? lines.map((ln,i)=>`<div class="lyric-line" data-i="${i}">${esc(lyricText(ln))}</div>`).join("") : "暂无歌词");
     setHTML($("focusLyrics"), lines.length? lines.map((ln,i)=>`<div class="flyric" data-i="${i}">${esc(lyricText(ln))}</div>`).join("") : "");
     // bio
@@ -557,6 +559,18 @@
       const it=items.find(x=>String(x.id)===el.dataset.id); if(it) playItem(it);
     }));
   }
+  // 把歌词当前行平滑滚动到容器可视区中央（手动算 scrollTop，WKWebView 下比 scrollIntoView 可靠）
+  function scrollLyricIntoView(el){
+    try{
+      const box=el.parentElement; if(!box)return;
+      const target=el.offsetTop - box.clientHeight/2 + el.offsetHeight/2;
+      const top=Math.max(0,Math.min(box.scrollHeight-box.clientHeight,target));
+      if(Math.abs(top-box.scrollTop)>2){
+        if(box.scrollTo) box.scrollTo({top:top,behavior:"smooth"});
+        else box.scrollTop=top;
+      }
+    }catch(e){ try{ el.scrollIntoView({block:"center",behavior:"smooth"}); }catch(_){} }
+  }
   function updateTimeUI(){
     const pct=S.duration>0?Math.min(100,S.time/S.duration*100):0;
     $("miniFill").style.width=pct+"%"; $("playerFill").style.width=pct+"%"; $("focusFill").style.width=pct+"%";
@@ -565,40 +579,76 @@
     $("focusCur").textContent=fmt(S.time); $("focusDur").textContent=fmt(S.duration);
     const symbol=S.playing?"❚❚":"▶";
     $("miniPlay").textContent=symbol; $("pPlay").textContent=symbol; $("fPlay").textContent=symbol;
-    // 歌词高亮
+    // 歌词高亮 + 自动滚动（仅当高亮行变化时才滚，避免每秒轮询反复滚动抖动）
     const lines=(S.lyrics&&S.lyrics.lines)||[];
     let idx=-1; for(let i=0;i<lines.length;i++){ if(lyricTime(lines[i])<=S.time) idx=i; else break; }
     document.querySelectorAll(".lyric-line,.flyric").forEach(el=>el.classList.toggle("cur",Number(el.dataset.i)===idx));
-    const cur=document.querySelector(".focus-lyrics .flyric.cur");
-    if(cur&&S.focus) cur.scrollIntoView({block:"center",behavior:"smooth"});
+    if(idx!==S.lyricCurIdx){
+      S.lyricCurIdx=idx;
+      // 专注模式大屏歌词：滚动到中央
+      const fc=document.querySelector(".focus-lyrics .flyric.cur");
+      if(fc&&S.focus) scrollLyricIntoView(fc);
+      // 播放器主页面歌词面板：同样把当前行滚到可视区中央
+      const pc=document.querySelector("#lyricsBox .lyric-line.cur");
+      if(pc){
+        const box=$("lyricsBox");
+        if(box && box.scrollHeight>box.clientHeight+4) scrollLyricIntoView(pc);
+      }
+    }
   }
 
   /* ---------- mini 播放器 ---------- */
   // ---- 进度条拖拽/点击 seek（mini / 播放器 / 专注）----
+  // 拖拽过程只更新视觉；松手时才发一次 setSeek，避免 pointermove 每秒发几十次请求
   function bindSeekBar(barEl, fillId){
     if(!barEl) return;
-    let dragging=false;
-    const seekFromEvent=(ev)=>{
-      if(!(S.duration>0)) return;
+    let dragging=false, pendingSec=0, lastSec=-1;
+    const ratioFromEvent=(ev)=>{
       const r=barEl.getBoundingClientRect();
       let x=(ev.clientX!=null)?ev.clientX:(ev.touches&&ev.touches[0]&&ev.touches[0].clientX);
-      if(x==null) return;
-      let ratio=(x-r.left)/r.width;
-      ratio=Math.max(0,Math.min(1,ratio));
-      const sec=Math.round(ratio*S.duration);
-      // 立即更新视觉与本地时间，给出即时反馈
-      S.time=sec; updateTimeUI();
-      // 抑制轮询覆盖：LMS seek 生效有延迟，1.5s 内不让 pollStatus 用旧 time 弹回
-      S.seekingUntil = Date.now() + 1500;
-      try{ if(api.setSeek) api.setSeek(sec).catch(function(){}); }catch(e){}
+      if(x==null || r.width<=0) return null;
+      return Math.max(0,Math.min(1,(x-r.left)/r.width));
+    };
+    const preview=(ev)=>{
+      if(!(S.duration>0)) return;
+      const ratio=ratioFromEvent(ev); if(ratio==null) return;
+      pendingSec=Math.round(ratio*S.duration);
+      if(pendingSec===lastSec) return;
+      lastSec=pendingSec;
+      S.time=pendingSec;
+      // 只更新三个 fill 与时间文本，给出即时反馈（不触发歌词/轮询连锁）
+      const pct=S.duration>0?pendingSec/S.duration*100:0;
+      ["miniFill","playerFill","focusFill"].forEach(id=>{ const f=$(id); if(f) f.style.width=pct+"%"; });
+      $("playerCur").textContent=fmt(pendingSec); $("focusCur").textContent=fmt(pendingSec);
+    };
+    const commit=()=>{
+      barEl.classList.remove("seeking");
+      if(pendingSec<0) return;
+      // 抑制轮询覆盖：LMS seek 生效有延迟，2.5s 内不让 pollStatus 用旧 time 弹回
+      S.seekingUntil=Date.now()+2500;
+      S.time=pendingSec; updateTimeUI();
+      apiCall("setSeek",{ok:false},pendingSec).then(r=>{
+        if(r&&r.ok===false){ toast("定位失败："+((r&&r.error)||"播放器不在线")); }
+      });
     };
     barEl.style.cursor="pointer";
-    barEl.addEventListener("pointerdown",ev=>{ dragging=true; seekFromEvent(ev);
-      try{ barEl.setPointerCapture(ev.pointerId); }catch(e){} });
-    barEl.addEventListener("pointermove",ev=>{ if(dragging) seekFromEvent(ev); });
-    barEl.addEventListener("pointerup",ev=>{ dragging=false;
-      try{ barEl.releasePointerCapture(ev.pointerId); }catch(e){} });
-    barEl.addEventListener("pointercancel",()=>{ dragging=false; });
+    barEl.addEventListener("pointerdown",ev=>{
+      if(!(S.duration>0)) return;
+      ev.preventDefault();
+      dragging=true; lastSec=-1; pendingSec=-1;
+      barEl.classList.add("seeking");
+      try{ barEl.setPointerCapture(ev.pointerId); }catch(e){}
+      preview(ev);
+    });
+    barEl.addEventListener("pointermove",ev=>{ if(dragging) preview(ev); });
+    barEl.addEventListener("pointerup",ev=>{
+      if(!dragging) return;
+      dragging=false;
+      try{ barEl.releasePointerCapture(ev.pointerId); }catch(e){}
+      commit();
+    });
+    barEl.addEventListener("pointercancel",()=>{ if(dragging){ dragging=false; commit(); } });
+    // 纯点击（无拖拽）：pointerdown 已 preview，pointerup 会 commit，无需额外 click
   }
   function initSeekBars(){
     const miniFill=$("miniFill"), playerFill=$("playerFill"), focusFill=$("focusFill");
@@ -654,12 +704,18 @@
     $("focusAside").hidden=true; S.fpanel="";
     document.querySelectorAll("#focusToggles button").forEach(b=>b.classList.toggle("on",b.dataset.fpanel==="lyricsOn"));
     updateTimeUI();
-    // 原生标题栏改深色，消除顶部白边（失败不影响功能）
-    apiCall("setFocusChrome",{},true);
+    // 根治漏边：进入系统全屏，原生标题栏彻底消失（官方 API，不依赖 pyobjc）
+    document.body.classList.add("is-focus");
+    apiCall("setFullscreen",{},true).then(r=>{
+      if(r&&r.ok===false){ apiCall("setFocusChrome",{},true); }  // 兜底：改标题栏色
+    });
   }
   function closeFocus(){
     S.focus=false; $("focusScreen").hidden=true;
-    apiCall("setFocusChrome",{},false);
+    document.body.classList.remove("is-focus");
+    apiCall("setFullscreen",{},false).then(r=>{
+      if(r&&r.ok===false){ apiCall("setFocusChrome",{},false); }
+    });
   }
 
   /* ---------- 常规播放器面板开关 ---------- */

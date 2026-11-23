@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.15"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.16"}
 
 
 @_wrap
@@ -312,6 +312,41 @@ def _safe_float(v):
 
 # ---- 专注模式：动态切换原生标题栏外观（消除顶部漏边）----
 _FOCUS_CHROME = {"on": False}
+_FULLSCREEN_ACTIVE = {"on": False}
+
+
+@_wrap
+def setFullscreen(on):
+    """专注模式进入系统全屏（原生标题栏彻底消失，根治漏边）；退出恢复。
+    pywebview 6.x：优先用 is_fullscreen 属性赋值（幂等，能纠正系统 Esc 先退全屏的竞态），
+    兜底 toggle_fullscreen()。不依赖 pyobjc 动态改色。"""
+    want = bool(on)
+    try:
+        import webview as _wv
+        wins = getattr(_wv, "windows", None) or []
+        if not wins:
+            return {"ok": False, "error": "no-window"}
+        win = wins[0]
+        # 首选：is_fullscreen 属性，读实际状态后幂等赋值
+        try:
+            cur = bool(getattr(win, "is_fullscreen"))
+            if cur != want:
+                setattr(win, "is_fullscreen", want)
+            _FULLSCREEN_ACTIVE["on"] = want
+            return {"ok": True, "fullscreen": want, "via": "property"}
+        except Exception:
+            pass
+        # 兜底：toggle（非幂等，靠状态标记防重复）
+        if _FULLSCREEN_ACTIVE["on"] == want:
+            return {"ok": True, "already": True, "fullscreen": want}
+        fn = getattr(win, "toggle_fullscreen", None)
+        if not callable(fn):
+            return {"ok": False, "error": "no-fullscreen-api"}
+        fn()
+        _FULLSCREEN_ACTIVE["on"] = want
+        return {"ok": True, "fullscreen": want, "via": "toggle"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
 
 
 def setFocusChrome(on):
@@ -1868,6 +1903,7 @@ class BridgeAPI:
     def getLyricSources(self, track): return getLyricSources(track)
     def setLyricChoice(self, track, source, text): return setLyricChoice(track, source, text)
     def clearLyricChoice(self, track): return clearLyricChoice(track)
+    def setFullscreen(self, on): return setFullscreen(on)
     def setFocusChrome(self, on): return setFocusChrome(on)
     def getArtistImage(self, artist, autoFetch=True): return getArtistImage(artist, autoFetch)
     def setArtistImage(self, artist, dataUri): return setArtistImage(artist, dataUri)
