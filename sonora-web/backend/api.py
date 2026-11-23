@@ -45,7 +45,7 @@ def _wrap(fn):
 @_wrap
 def getMeta():
     return {"version": c.VERSION, "appName": "Sonora 颂诺",
-            "platform": sys.platform, "bridge": "pywebview-v2.0.10"}
+            "platform": sys.platform, "bridge": "pywebview-v2.0.11"}
 
 
 @_wrap
@@ -148,6 +148,8 @@ def getStatus(playerId=""):
 # ---- 封面 / 歌词 / 简介 / 音频 ----
 @_wrap
 def getCover(track, size=420):
+    """取高清封面。LMS 默认 cover_300x300 放大到 440px 会发虚，
+    优先尝试 cover_1000x1000 / 原始 cover.jpg，再回退 300x300。"""
     if not isinstance(track, dict):
         return None
     coverid = str(track.get("coverid") or track.get("artwork_track_id") or "")
@@ -157,33 +159,53 @@ def getCover(track, size=420):
     full_url = c.np_cover_url(CFG, coverid, url)
     if not full_url:
         return None
-    data = None
-    try:
-        data = c.http_get(full_url, timeout=8)
-    except Exception:
-        data = None
-    if not data:
-        # 兜底：带 Basic Auth 头重试（LMS 启用密码保护时）
+    candidates = []
+    if not url and "cover_300x300" in full_url:
+        candidates.append(full_url.replace("cover_300x300", "cover_1000x1000"))
+        candidates.append(full_url.replace("cover_300x300.jpg", "cover.jpg"))
+    candidates.append(full_url)
+    seen = set()
+    candidates = [u for u in candidates if u and not (u in seen or seen.add(u))]
+
+    def _valid_image(d):
+        return bool(d and len(d) > 512 and (
+            d[:8] == b"\x89PNG\r\n\x1a\n" or d[:3] == b"\xff\xd8\xff" or
+            d[:6] in (b"GIF87a", b"GIF89a") or d[:4] == b"RIFF"))
+
+    def _decode(d):
         try:
-            import urllib.request as _ur
-            hdr = c.lms_auth_headers(CFG)
-            req = _ur.Request(full_url, headers=hdr)
-            with _ur.urlopen(req, timeout=8) as _r:
-                data = _r.read()
+            return c.decode_cover_png(
+                d, max_size=int(size), square=True,
+                pad_color=c.THEMES.get(CFG.get("theme", "light"), {})
+                           .get("cover_pad", "#0d292d"))
         except Exception:
             return None
-    if not data:
-        return None
-    try:
-        png = c.decode_cover_png(data, max_size=int(size), square=True,
-                                 pad_color=c.THEMES.get(CFG.get("theme", "light"), {})
-                                            .get("cover_pad", "#0d292d"))
-    except Exception:
-        png = None
-    if not png:
-        return None
-    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
+    hdr = None
+    try:
+        hdr = c.lms_auth_headers(CFG)
+    except Exception:
+        pass
+    import urllib.request as _ur
+    for u in candidates:
+        data = None
+        try:
+            data = c.http_get(u, timeout=8)
+        except Exception:
+            data = None
+        if not _valid_image(data) and hdr:
+            try:
+                req = _ur.Request(u, headers=hdr)
+                with _ur.urlopen(req, timeout=8) as _r:
+                    data = _r.read()
+            except Exception:
+                data = None
+        if not _valid_image(data):
+            continue
+        png = _decode(data)
+        if png:
+            return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    return None
 
 @_wrap
 def getLyrics(track):
@@ -254,18 +276,27 @@ def getAudio(track):
     # squeezelite 输出日志解析（若进程在跑）；parse_sl_output 返回 (state, bool)
     sl_state = {}
     try:
-        sl_lines = list(_AUDIO_STATE.get("lines", []))
-        for line in sl_lines:
-            try:
-                r = c.parse_sl_output(line, sl_state)
-                if isinstance(r, tuple):
-                    sl_state = r[0] or sl_state
-                elif isinstance(r, dict):
-                    sl_state = r
-            except Exception:
-                pass
+        sl_state = {k: v for k, v in _AUDIO_STATE.items() if k != "lines"}
     except Exception:
         pass
+    if not sl_state:
+        # 兼容外部启动/旧版本进程：从已记录的引擎日志反推输出状态
+        try:
+            with _ENGINE_LOCK:
+                _logs = list(_ENGINE.get("logs", []))
+            _st = {}
+            for _line in _logs:
+                try:
+                    _r = c.parse_sl_output(_line, _st)
+                    if isinstance(_r, tuple):
+                        _st = _r[0] or _st
+                    elif isinstance(_r, dict):
+                        _st = _r
+                except Exception:
+                    pass
+            sl_state = _st
+        except Exception:
+            pass
     # verdict 的 st 参数用 LMS status 的 volume/rate，sl 参数用日志解析结果
     vst = {"volume": 100, "rate": 1}
     try:
@@ -278,6 +309,13 @@ def getAudio(track):
     verdict = c.audio_link_verdict(spec, vst, sl_state, True)
     if isinstance(verdict, (tuple, list)) and len(verdict) >= 3:
         verdict = {"level": verdict[0], "title": verdict[1], "detail": verdict[2]}
+    if isinstance(verdict, dict):
+        _t = str(verdict.get("title") or "")
+        verdict["short"] = ("BIT-PERFECT" if "完美直通" in _t else
+                            "已转码" if "转码" in _t else
+                            "已重采样" if "重采样" in _t else
+                            "音量介入" if "音量" in _t else
+                            "非1倍速" if "倍速" in _t else "待确认")
     return {"spec": spec, "verdict": verdict, "slState": sl_state}
 
 
@@ -1131,6 +1169,18 @@ def _engine_log(line):
     txt = str(line).rstrip("\n")
     if not txt:
         return
+    # 实时解析 squeezelite -d 输出：转码/直通判定依赖实际输出采样率
+    try:
+        _st = dict(_AUDIO_STATE)
+        _parsed, _hit = c.parse_sl_output(txt, _st)
+        if _hit and isinstance(_parsed, dict):
+            _lines = list(_AUDIO_STATE.get("lines", []))
+            _lines.append(txt)
+            _parsed["lines"] = _lines[-200:]
+            _AUDIO_STATE.clear()
+            _AUDIO_STATE.update(_parsed)
+    except Exception:
+        pass
     with _ENGINE_LOCK:
         _ENGINE["logs"].append(txt)
         if len(_ENGINE["logs"]) > _LOG_MAX:
@@ -1298,6 +1348,7 @@ def startEngine():
         _ENGINE["logs"] = ["$ %s\n" % c.preview_cmd(argv)]
         _ENGINE["exit_code"] = None
         _ENGINE["argv"] = list(argv)
+        _AUDIO_STATE.clear()  # 新一轮引擎，清空上一轮的直通判定
     t = threading.Thread(target=_engine_reader, args=(proc,), daemon=True)
     t.start()
     # 延迟验证：2 秒后查 LMS 是否真的看到播放器，把结果写进日志

@@ -5268,8 +5268,10 @@ def audio_link_verdict(spec, st, sl, app_owned):
     else:
         same = "未读到 squeezelite 实际输出采样率"
     if vol != 100:
+        _clr = ("输出采样率与源文件一致，未发现转码；"
+                if out_rate and src_rate and out_rate == src_rate else "")
         return ("warn", "数字音量介入",
-                "LMS 音量为 %s（非 100），会改动 PCM 数据，非 bit-perfect" % vol)
+                _clr + "LMS 音量为 %s（非 100），会改动 PCM 数据，非 bit-perfect" % vol)
     try:
         rate_f = float(rate)
     except Exception:

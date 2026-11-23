@@ -1,0 +1,54 @@
+/* ============================================================
+   refine8.css — v2.0.11 真机三次反馈修复
+   1) 音乐库工具条：播放列表按钮与大图标/列表切换明显分开
+   2) LED 状态用短标签，避免长文本被裁切成「待确认…」看不懂
+   3) 封面使用高清源后，禁止额外的模糊滤镜作用到前景封面
+   ============================================================ */
+
+/* ---------- #1 工具条按钮区分 ---------- */
+.lib-toolbar .lib-pl-btn{
+  width:auto;
+  min-width:104px;
+  padding:0 12px;
+  gap:6px;
+  font-size:13px;
+  letter-spacing:.3px;
+  color:#a5e6c8;
+  border-color:rgba(124,199,166,.5);
+  background:rgba(124,199,166,.10);
+  margin-right:2px;
+}
+.lib-toolbar .lib-pl-btn:hover{
+  background:rgba(124,199,166,.2);
+  border-color:#7cc7a6;
+}
+/* 视觉分隔线：把「播放列表」与「排序 / 视图切换」分成两组 */
+.lib-toolbar .tool-sep{
+  display:inline-block;
+  width:1px;
+  height:22px;
+  flex:none;
+  margin:0 6px 0 2px;
+  background:rgba(255,255,255,.2);
+}
+/* 视图切换按钮保持纯图标，并补 title 说明 */
+
+/* ---------- #2 LED 状态短标签 ---------- */
+#ledStatus{
+  display:block;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width:100%;
+  font-size:11px;
+  letter-spacing:1px;
+}
+
+/* ---------- #3 前景封面保持锐利（模糊只用于背景） ---------- */
+.focus-cover img,
+.player-cover img,
+.mini-cover img{
+  image-rendering:auto;
+  -webkit-backface-visibility:hidden;
+  backface-visibility:hidden;
+}
