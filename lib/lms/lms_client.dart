@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:math" as math;
 import "dart:convert";
 import "dart:io";
 
@@ -47,6 +48,47 @@ class PlaybackStatus {
   });
 
   bool get isPlaying => mode == "play";
+
+  /// Parses an LMS "status" result into a UI-friendly snapshot.
+  /// Kept static and pure so it can be unit-tested without a server.
+  static PlaybackStatus fromLms(Map<String, dynamic> m, String base) {
+    final mode = (m["mode"] ?? "stop").toString();
+    int vol = 100;
+    final v = m["volume"];
+    if (v != null) {
+      final raw = (v is num) ? v.toInt() : int.tryParse(v.toString()) ?? 100;
+      vol = lmsToSlider(raw);
+    }
+    String artwork = "";
+    final art = m["artwork_track_id"] ?? m["coverid"];
+    if (art != null && art.toString().isNotEmpty) {
+      artwork = "$base/music/$art/cover";
+    }
+    return PlaybackStatus(
+      mode: mode,
+      title: (m["title"] ?? "").toString(),
+      artist: (m["artist"] ?? "").toString(),
+      album: (m["album"] ?? "").toString(),
+      duration: _toInt(m["duration"]),
+      position: _toInt(m["time"]),
+      volume: vol,
+      artworkUrl: artwork,
+      trackId: (m["id"] ?? "").toString(),
+    );
+  }
+
+  /// LMS mixer volume (0..100, perceptual curve) -> UI slider (0..100, linear).
+  /// Matches the legacy Sonora Web behaviour: slider = sqrt(lms / 100) * 100.
+  static int lmsToSlider(int raw) {
+    final x = (raw.clamp(0, 100) as num).toDouble() / 100.0;
+    return (100.0 * math.sqrt(x)).round();
+  }
+
+  static int _toInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
 }
 
 class LmsException implements Exception {
@@ -111,31 +153,7 @@ class LmsClient {
   Future<PlaybackStatus> status() async {
     final r = await rpc(const ["status", "-", "1", "tags:ACITW"]);
     if (r is! Map) return const PlaybackStatus();
-    final m = Map<String, dynamic>.from(r);
-    final mode = (m["mode"] ?? "stop").toString();
-    int vol = 100;
-    final v = m["volume"];
-    if (v != null) {
-      // LMS volume can be 0..100 or 0..128 depending on player.
-      final raw = (v is num) ? v.toInt() : int.tryParse(v.toString()) ?? 100;
-      vol = raw > 100 ? (raw * 100 ~/ 128) : raw;
-    }
-    String artwork = "";
-    final art = m["artwork_track_id"] ?? m["coverid"];
-    if (art != null && art.toString().isNotEmpty) {
-      artwork = "${config.base}/music/$art/cover";
-    }
-    return PlaybackStatus(
-      mode: mode,
-      title: (m["title"] ?? "").toString(),
-      artist: (m["artist"] ?? "").toString(),
-      album: (m["album"] ?? "").toString(),
-      duration: _toInt(m["duration"]),
-      position: _toInt(m["time"]),
-      volume: vol,
-      artworkUrl: artwork,
-      trackId: (m["id"] ?? "").toString(),
-    );
+    return PlaybackStatus.fromLms(Map<String, dynamic>.from(r), config.base);
   }
 
   Future<void> play() => rpc(const ["play"]);
@@ -144,13 +162,14 @@ class LmsClient {
   Future<void> next() => rpc(const ["playlist", "index", "+1"]);
   Future<void> previous() => rpc(const ["playlist", "index", "-1"]);
   Future<void> seek(int seconds) => rpc(["seek", seconds]);
-  Future<void> setVolume(int value) => rpc(["volume", value]);
+  /// UI slider (0..100, linear) -> LMS mixer volume (0..100, perceptual curve).
+  /// Inverse of PlaybackStatus.lmsToSlider.
+  static int sliderToLms(int slider) {
+    final x = (slider.clamp(0, 100) as num).toDouble() / 100.0;
+    return (100.0 * x * x).round();
+  }
+
+  Future<void> setVolume(int slider) => rpc(["mixer", "volume", sliderToLms(slider).toString()]);
 
   void dispose() => _http.close();
-
-  static int _toInt(dynamic v) {
-    if (v == null) return 0;
-    if (v is num) return v.toInt();
-    return int.tryParse(v.toString()) ?? 0;
-  }
 }
