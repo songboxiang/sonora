@@ -113,12 +113,16 @@ disconnected
 | P0（已完成） | 共享服务层 + 连接诊断页 + 自动拉起核心 + 播放控制/曲库只读列表 | `flutter analyze/test` 全绿；`probe --with-core` 与真实 UI 自动连接路径都显示在线播放器 1 个 |
 | M1 | widget test 与更细的状态机边界 | probe + widget test；你在 VM 桌面确认页面 |
 | M2 | 播放器选择持久化 + 无播放器指引 | probe 无在线播放器时 UI 有明确指引 |
-| M3 | Navidrome `clientStream` 音频闭环 | `just_audio` 播一首歌，进度/seek 正常 |
+| P1（已完成） | Navidrome `clientStream` 音频闭环：`NavidromeAudio` + `just_audio` + 曲库点歌播放 + 音源互斥 | CLI `/rest/stream` 返回 `audio/flac`；UI 自动播放加载 273s 流并 seek 到 136s，位置回读 136s |
 | M4 | 打包 / 签名 / 归档 | `flutter build macos` + adhoc codesign + 去 quarantine |
 
 注意 P0/M3 依赖一个**真实在线播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起。LMS 的 `players count` 会把已断开的残留条目算进去，因此一律用 `connected == 1` 判定在线；若在线数为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
 
 macOS 本地网络权限：app 已声明 `NSLocalNetworkUsageDescription` 并使用独立 bundle id `com.songboxiang.sonora.v2`。首次手动打开时若系统询问“是否允许访问本地网络”，必须点允许，否则 LMS/Navidrome 连接会以 `No route to host` 失败。SSH 下的无界面进程没有授权界面，因此该场景的验证以命令行探针和 root 授权进程为准。
+
+构建约束：Xcode 27 不再接受 10.15 部署目标。`Runner.xcodeproj` 与 `macos/Podfile`（含 `post_install` 强制覆盖所有 Pod target）都设为 12.0；否则新增 `just_audio` / `audio_session` 后 CocoaPods 生成的工程会因为 10.15 而构建失败。
+
+播放边界：`NavidromeAudio.playSong()` 对 `AudioPlayer.play()` 加 3 秒超时，避免无音频设备的无界面环境把控制路径卡死；`NavidromeAudio.streamUrl()` 只带 md5 token，绝不发明文密码，也不带对二进制流无意义的 `f=json`。LMS 与 Navidrome 音源互斥：开始客户端流会停止 squeezelite 核心，连接 LMS 会停止客户端音频。
 
 ## 9. 明确不做
 

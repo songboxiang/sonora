@@ -6,6 +6,7 @@ import "package:flutter/material.dart";
 import "core/models.dart";
 import "core/services.dart";
 import "lms/protocol.dart";
+import "navidrome/audio.dart";
 import "navidrome/subsonic.dart";
 import "squeezelite/core_runner.dart";
 
@@ -57,6 +58,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   List<String> _logs = <String>[];
   List<AlbumInfo> _albums = <AlbumInfo>[];
   List<SongInfo> _songs = <SongInfo>[];
+  NavidromeAudio? _audio;
+  bool _audioSubscribed = false;
+  String _source = "lms";
+  SongInfo? _currentSong;
 
   @override
   void initState() {
@@ -64,13 +69,15 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // Headless verification hook: SONORA_AUTO_CONNECT=1 makes the real UI
     // exercise the same connect path a user clicks, without GUI automation.
-    if (Platform.environment["SONORA_AUTO_CONNECT"] == "1") {
+    final autoConnect = Platform.environment["SONORA_AUTO_CONNECT"] == "1";
+    final autoPlay = Platform.environment["SONORA_AUTO_PLAY"] == "1";
+    if (autoConnect || autoPlay) {
       // ignore: avoid_print
-      print("SONORA_AUTO_CONNECT armed");
+      print("SONORA headless hooks armed");
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // ignore: avoid_print
-        print("SONORA_AUTO_CONNECT firing");
-        unawaited(_connect());
+        print("SONORA headless hooks firing");
+        unawaited(autoConnect ? _connect() : _autoPlayNavidrome());
       });
     }
   }
@@ -80,6 +87,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     unawaited(_runner?.stop());
+    unawaited(_audio?.dispose());
     for (final c in <TextEditingController>[
       _host, _port, _slim, _user, _pass, _lmsCreds, _navHost, _navCreds,
     ]) {
@@ -95,7 +103,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
 
   void _log(String line) {
     final stamped = "${DateTime.now().toIso8601String().substring(11, 19)} $line";
-    if (Platform.environment["SONORA_AUTO_CONNECT"] == "1") {
+    if (Platform.environment["SONORA_AUTO_CONNECT"] == "1" ||
+        Platform.environment["SONORA_AUTO_PLAY"] == "1") {
       // ignore: avoid_print
       print(stamped);
     }
@@ -129,6 +138,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   Future<void> _connect() async {
     setState(() => _busy = true);
     try {
+      await _audio?.stop();
+      if (!mounted) return;
+      setState(() => _source = "lms");
       if (_lmsCreds.text.trim().isNotEmpty && _user.text.isEmpty) {
         _importLmsCreds();
       }
@@ -233,6 +245,172 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _playerId = null;
     if (mounted) setState(() => _coreStatus = "已停止");
     _log("核心已停止");
+  }
+
+  PlaybackStatus _navStatus({
+    required int position,
+    int? duration,
+    required bool playing,
+  }) {
+    final song = _currentSong;
+    return PlaybackStatus(
+      mode: playing ? "play" : "pause",
+      title: song?.title ?? "",
+      artist: song?.artist ?? "",
+      album: song?.album ?? "",
+      duration: duration ?? song?.duration ?? 0,
+      position: position,
+      volume: _volume,
+    );
+  }
+
+  void _subscribeAudio() {
+    if (_audioSubscribed || _audio == null) return;
+    _audioSubscribed = true;
+    _audio!.positionStream.listen((p) {
+      if (!mounted || _source != "navidrome") return;
+      setState(() {
+        _status = _navStatus(
+          position: p.inSeconds,
+          duration: _audio?.duration?.inSeconds,
+          playing: _audio?.isPlaying ?? false,
+        );
+      });
+    });
+    _audio!.durationStream.listen((d) {
+      if (!mounted || _source != "navidrome" || d == null) return;
+      setState(() {
+        _status = _navStatus(
+          position: _audio?.position.inSeconds ?? 0,
+          duration: d.inSeconds,
+          playing: _audio?.isPlaying ?? false,
+        );
+      });
+    });
+    _audio!.stateStream.listen((s) {
+      if (!mounted || _source != "navidrome") return;
+      setState(() {
+        _status = _navStatus(
+          position: _audio?.position.inSeconds ?? 0,
+          duration: _audio?.duration?.inSeconds,
+          playing: s.playing,
+        );
+      });
+    });
+  }
+
+  Future<void> _playNavidromeSong(SongInfo song) async {
+    final target = _navidromeTarget();
+    if (target == null) return;
+    await _stopCore();
+    _audio ??= NavidromeAudio(onLog: _log);
+    if (!mounted) return;
+    setState(() {
+      _source = "navidrome";
+      _currentSong = song;
+      _status = _navStatus(position: 0, playing: true);
+    });
+    _subscribeAudio();
+    _log("Navidrome 播放：${song.title}");
+    try {
+      await _audio!.playSong(host: target.host, auth: target.auth, song: song);
+      await _audio!.setVolume(_volume / 100.0);
+    } catch (e) {
+      _log("Navidrome 播放失败 ${e.toString().split('\n').first}");
+    }
+  }
+
+  Future<void> _togglePlay() async {
+    if (_source == "navidrome") {
+      final a = _audio;
+      if (a == null) return;
+      if (a.isPlaying) {
+        await a.pause();
+      } else {
+        await a.resume();
+      }
+      if (!mounted) return;
+      setState(() {
+        _status = _navStatus(
+          position: a.position.inSeconds,
+          duration: a.duration?.inSeconds,
+          playing: a.isPlaying,
+        );
+      });
+      return;
+    }
+    await _command(
+      _status.isPlaying ? ["pause"] : ["play"],
+      _status.isPlaying ? "暂停" : "播放",
+    );
+  }
+
+  Future<void> _seek(int seconds) async {
+    if (_source == "navidrome") {
+      await _audio?.seek(Duration(seconds: seconds));
+      return;
+    }
+    await _command(["seek", seconds.toString()], "跳转");
+  }
+
+  Future<void> _setVolume(int value) async {
+    if (_source == "navidrome") {
+      await _audio?.setVolume(value / 100.0);
+      return;
+    }
+    await _command(
+      ["mixer", "volume", sliderToLms(value).toString()],
+      "音量 $value",
+    );
+  }
+
+  Future<void> _skip(int delta) async {
+    if (_source == "navidrome") {
+      await _skipNavidrome(delta);
+      return;
+    }
+    await _command(
+      ["playlist", "jump", delta > 0 ? "+1" : "-1"],
+      delta > 0 ? "下一首" : "上一首",
+    );
+  }
+
+  Future<void> _skipNavidrome(int delta) async {
+    if (_songs.isEmpty) return;
+    final i = _songs.indexOf(_currentSong ?? _songs.first);
+    final next = (i + delta) % _songs.length;
+    await _playNavidromeSong(_songs[next]);
+  }
+
+  Future<void> _autoPlayNavidrome() async {
+    await _loadAlbums();
+    if (_albums.isEmpty) {
+      _log("自动播放失败：没有专辑");
+      return;
+    }
+    final target = _navidromeTarget();
+    if (target == null) return;
+    final songs = await fetchNavidromeAlbum(
+      target,
+      _albums.first.id,
+      onError: (m) => _log("专辑详情 $m"),
+    );
+    if (songs.isEmpty) {
+      _log("自动播放失败：没有歌曲");
+      return;
+    }
+    await _playNavidromeSong(songs.first);
+    await Future.delayed(const Duration(seconds: 3));
+    final d = _audio?.duration;
+    if (d != null && d.inSeconds > 2) {
+      final targetSec = d.inSeconds ~/ 2;
+      await _audio!.seek(Duration(seconds: targetSec));
+      _log("自动播放 seek 到 ${targetSec}s / ${d.inSeconds}s");
+      await Future.delayed(const Duration(seconds: 1));
+      _log("自动播放 seek 后位置 ${_audio?.position.inSeconds}s");
+    } else {
+      _log("自动播放无有效 duration，跳过 seek");
+    }
   }
 
   Future<void> _refreshStatus() async {
@@ -441,6 +619,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  Text("音源：${_source == "navidrome" ? "Navidrome 客户端流" : "LMS 外部播放器"}"),
                   Text(
                     _status.title.isEmpty ? "未播放" : _status.title,
                     style: Theme.of(context).textTheme.headlineSmall,
@@ -457,45 +636,38 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                             : _status.position.toDouble()),
                     max: _status.duration == 0 ? 1 : _status.duration.toDouble(),
                     onChanged: (_) {},
-                    onChangeEnd: (v) =>
-                        unawaited(_command(["seek", v.round().toString()], "跳转")),
+                    onChangeEnd: (v) => unawaited(_seek(v.round())),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: <Widget>[
                       IconButton(
                         icon: const Icon(Icons.skip_previous),
-                        onPressed: () => unawaited(
-                            _command(["playlist", "jump", "-1"], "上一首")),
+                        onPressed: () => unawaited(_skip(-1)),
                       ),
                       IconButton(
                         icon: Icon(_status.isPlaying
                             ? Icons.pause_circle_filled
                             : Icons.play_circle_filled),
                         iconSize: 40,
-                        onPressed: () => unawaited(_command(
-                          _status.isPlaying ? ["pause"] : ["play"],
-                          _status.isPlaying ? "暂停" : "播放",
-                        )),
+                        onPressed: () => unawaited(_togglePlay()),
                       ),
                       IconButton(
                         icon: const Icon(Icons.skip_next),
-                        onPressed: () => unawaited(
-                            _command(["playlist", "jump", "+1"], "下一首")),
+                        onPressed: () => unawaited(_skip(1)),
                       ),
                     ],
                   ),
                   const Divider(),
-                  Text("音量（界面值 $_volume / LMS 值 ${sliderToLms(_volume)}）"),
+                  Text(_source == "navidrome"
+                      ? "音量（客户端流 $_volume%）"
+                      : "音量（界面值 $_volume / LMS 值 ${sliderToLms(_volume)}）"),
                   Slider(
                     value: _volume.toDouble(),
                     min: 0,
                     max: 100,
                     onChanged: (v) => setState(() => _volume = v.round()),
-                    onChangeEnd: (v) => unawaited(_command(
-                      ["mixer", "volume", sliderToLms(v.round()).toString()],
-                      "音量 ${v.round()}",
-                    )),
+                    onChangeEnd: (v) => unawaited(_setVolume(v.round())),
                   ),
                 ],
               ),
@@ -529,6 +701,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                       title: Text(s.title),
                       subtitle: Text(
                           "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}"),
+                      trailing: const Icon(Icons.play_arrow),
+                      onTap: () => unawaited(_playNavidromeSong(s)),
                     ),
                   ),
                 ],
