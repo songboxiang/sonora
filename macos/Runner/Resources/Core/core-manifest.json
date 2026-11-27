@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "revision": 1610,
+  "arch": "arm64",
+  "source": "SourceForge lmsclients/squeezelite/osx/m1/Squeezelite-M1-2.0.0r1610.dmg",
+  "sourceMd5": "81d0419b74c0c0f30823ac59a9fcf7a1",
+  "sourceSize": 2444887,
+  "binarySha256": "46857580315167da65f97eb74ca3ac2d18547c4cfcbfeec1b4abbf0366d05a81",
+  "binarySize": 4900552,
+  "note": "出厂核心；首次启动复制到用户目录后执行，运行时不修改 bundle。"
+}

@@ -15,9 +15,11 @@
 | GET 与 POST 行为不同 | GET `/jsonrpc.js` 返回 401 HTML；POST 带凭证返回 JSON。v1 混淆了两者 |
 | LMS 当前没有任何播放器 | `players 0 10` → `count:0`；`serverstatus` → `player count:0`，且无 `players_loop` 字段 |
 | 旧播放器 ID 已失效 | 保存的 `02:00:00:00:00:00` 发 status → 服务端直接断开连接 |
-| 旧版不内置播放器 | 旧版是 tkinter GUI，负责**启动/管理独立的 squeezelite 进程**；播放器需单独运行才能出现在 LMS |
+| 旧版不内置播放器 | 旧版是 tkinter GUI，负责启动/管理独立的 squeezelite 进程；**v2 必须把核心打包进 app 并自动拉起**，不应让用户手动启动 |
 
 结论：v1 连不上是**两个独立缺陷叠加**——协议字段判断错误（代码 bug）+ 无播放器可用（环境事实）。只修前者仍然连不上；只修后者也过不了连接页。
+
+v2 的修正：出厂核心随 bundle 打包，首次启动自动复制到用户可写目录并拉起子进程。播放器注册失败属于核心启动/诊断链路问题，不再是「用户请手动启动 squeezelite」这种人工步骤。
 
 ## 2. 设计目标
 
@@ -26,6 +28,7 @@
 3. **协议层可离线验证**：用真实响应做 fixture，单元测试不依赖 LMS 在线；同时提供实时 probe 工具，能在 SSH 里验证真实 LMS。
 4. **进度条闭环**：拖动只本地预览，松手提交一次 seek，服务端 poll 负责校正；任何一步失败都不能让 UI 卡死或跳回。
 5. **可回归**：所有踩过的坑固化为测试用例。
+6. **核心自动执行**：squeezelite 随 app 打包，首次启动自动复制到用户目录并拉起；真机验证只验证「启动 app 后自动注册」，不允许人工启动核心。
 
 ## 3. 分层架构
 
@@ -43,9 +46,11 @@ lib/
   ui/
     connect_screen.dart 地址/端口/账号/密码 + 逐层诊断输出
     player_screen.dart  封面/进度/控制/音量
+  squeezelite/
+    core_runner.dart     内置核心定位/复制/启动/停止（参数构造为纯函数，可测）
   main.dart
 tool/
-  probe.dart            命令行协议探针（见 §6）
+  probe.dart            命令行协议探针；--with-core 会自动拉起核心（见 §6）
 ```
 
 关键约束：`protocol.dart` 是纯函数，不碰网络；`transport.dart` 不含业务解析。这样协议解析可以吃真实 fixture 做测试，网络问题也不会被误判成解析问题。
@@ -58,7 +63,7 @@ disconnected
   → server_ok          （得到 _version）
   → discovering_players（POST players 0 50）
       ├─ players_found    → 选择播放器 → ready
-      └─ no_players       → 提示"未发现播放器" + 启动指引（阻塞，不进播放页）
+      └─ no_players       → 自动拉起内置核心并重试；仍无播放器则给诊断（阻塞，不进播放页）
 ```
 
 每一层失败停在对应状态并给出具体原因：
@@ -89,11 +94,12 @@ disconnected
 [transport] POST /jsonrpc.js ... 200
 [auth]      Authorization header sent ... ok
 [server]    version.result._version = 9.1.1
-[players]   count = 0  ← BLOCKER: no player registered
-[verdict]   server reachable; playback unavailable until a squeezelite player registers
+[core]      bundled core copied to user dir ... auto-started pid=1234
+[players]   count = 1  ← registered after core auto-start
+[verdict]   server reachable; playback ready
 ```
 
-这样我在 SSH 里就能对真实 LMS 验证协议层，不依赖截图。GUI 只验证"渲染与交互"，协议正确性由 probe 和单测保证。
+`dart run tool/probe.dart --with-core --lms-creds=<路径>` 会自动完成核心复制与拉起，真机验证不需要你手动启动 squeezelite。这样我在 SSH 里就能对真实 LMS 验证协议层，不依赖截图。GUI 只验证"渲染与交互"，协议正确性由 probe 和单测保证。
 
 ## 7. 配置与凭证
 
@@ -106,10 +112,10 @@ disconnected
 | M0 | models + protocol + transport + fixture 单测 + probe.dart | `dart test` 全绿；probe 对真实 LMS 输出 verdict |
 | M1 | 连接状态机 + 连接页 + 诊断输出 | probe + widget test；你在 VM 桌面确认页面 |
 | M2 | 播放器发现/选择 + 无播放器指引 | probe 显示 no_players 时 UI 有明确指引 |
-| M3 | playback status + 控制 + 进度条闭环 | §5 四个用例 + 真实播放器（需要你启动 squeezelite） |
+| M3 | playback status + 控制 + 进度条闭环 | §5 四个用例 + `probe --with-core` 自动拉起核心后 count 0→1 |
 | M4 | 打包 / 签名 / 归档 | `flutter build macos` |
 
-注意 M3 依赖一个**真实注册的播放器**。当前 LMS 上 `count:0`，所以 M3 开始前需要你启动 squeezelite 并确认它出现在 LMS 里——这是环境问题，不是代码能解决的。
+注意 M3 依赖一个**真实注册的播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起；如果 count 仍为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
 
 ## 9. 明确不做
 
@@ -119,13 +125,15 @@ disconnected
 
 ## 10. 需要你拍板
 
-1. 播放器：你是否能启动 squeezelite 并让它注册到 LMS？如果暂时不能，M3 的真实验证要推迟。
+1. 核心策略（已定）：squeezelite 随 app 打包并自动拉起；验证时不再需要你手动启动。
 2. 凭证导入：是否允许 v2 读取旧版 `~/.squeezelite_gui/config.json`（只读）来自动填账号密码？
 3. 产物位置：编译产物留在 VM，还是后续要传回宿主 Mac 使用？
 
 ## 11. 打包与升级（详见 UPGRADE.md）
 
 Squeezelite 播放核心随程序打包，但运行时使用用户目录里的可升级副本（不修改自身签名 bundle）。
+核心启动参数已实测定死：`-s <lms_host>:<slim_port>`（默认 3483，**不是** JSON-RPC 的 9000）、`-n <播放器名>`、`-m <稳定本地管理 MAC>`。
+其中 `-m` 用来避开 LMS 上残留的 `02:00:00:00:00:00`（实测该 MAC 收 HELO 后不注册），MAC 由主机名/用户稳定派生。
 升级体系分四条轨道：程序主体与 squeezelite 可自动升级；LMS 服务端与 Navidrome 只做版本校验、
 展示更新内容并提示手动升级。四条轨道共用同一条升级流水线，差异只在数据源实现。
 

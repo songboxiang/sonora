@@ -57,7 +57,7 @@ Sonora.app/Contents/Resources/Core/
 首次启动逻辑：
 1. 读 `core-state.json`；不存在则从 bundle 复制对应架构的核心到用户目录，写入 state。
 2. 存在则校验 sha256；损坏则从 bundle 恢复（出厂核心是最后的救命副本）。
-3. 启动独立子进程，记录 PID；不做进程内嵌——崩溃时才能留下可检测的孤儿进程。
+3. 由 CoreRunner 自动启动独立子进程，记录 PID 并监听退出；不做进程内嵌——崩溃时才能留下可检测的孤儿进程。用户永远不需要手动执行二进制。
 
 架构选择：优先 universal；若上游只给分离包，按 `uname -m` 选 arm64/x86_64。两种都要能落到同一个 `Core/squeezelite` 路径，上层不感知。
 
@@ -189,4 +189,4 @@ update_available → downloading → verifying → staging → installing
 - `tool/probe_update.dart`：一条命令打印四条轨道的版本源可达性、解析结果、更新内容条数、最终 verdict。我在 SSH 里就能验收，不依赖截图。Navidrome 轨直接打 `192.168.199.2:4533/rest/ping` 取 `serverVersion`，并与 `releases.atom` 的最新 tag 比较。
 - 单测 fixture：`releases.atom`、`servers.json`、SourceForge RSS、`commits.atom`、旧版真实响应；版本比较覆盖 `9.1.1` / `2.0.0.1465` / `9.1.2 - 1792854063`。
 - 流水线集成测试（本地假文件）：成功、hash 不符、下载中断、健康检查失败回滚、清理清单完整性。
-- 真实验收：打包核心后启动 squeezelite → LMS `players count` 从 0 变 1 → 播放/暂停/进度条拖动闭环。
+- 真实验收：`dart run tool/probe.dart --with-core --lms-creds=<路径>` → 自动复制打包核心、拉起子进程、等待 LMS `players count` 从 0 变 1 → 播放/暂停/进度条拖动闭环。全程不需要人工启动 squeezelite。
