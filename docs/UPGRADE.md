@@ -190,4 +190,5 @@ update_available → downloading → verifying → staging → installing
 - 单测 fixture：`releases.atom`、`servers.json`、SourceForge RSS、`commits.atom`、旧版真实响应；版本比较覆盖 `9.1.1` / `2.0.0.1465` / `9.1.2 - 1792854063`。
 - 流水线集成测试（本地假文件）：成功、hash 不符、下载中断、健康检查失败回滚、清理清单完整性。
 - 深度曲库验收：`dart run tool/probe.dart --with-libs --lms-creds=<路径>` → 逐个 `getAlbum` 读取全部专辑详情与歌曲列表，打印每首歌名、艺人、时长、ID 与曲库汇总。
-- 真实验收：`dart run tool/probe.dart --with-core --lms-creds=<路径>` → 自动复制打包核心、拉起子进程、等待 LMS `players count` 从 0 变 1 → 播放/暂停/进度条拖动闭环。全程不需要人工启动 squeezelite。
+- 真实验收：`dart run tool/probe.dart --with-core --lms-creds=<路径>` → 自动复制打包核心、拉起子进程、等待出现 `connected == 1` 的在线播放器（不能只看 `players count`，它包含离线残留）→ 打印 `count / 在线` 与 verdict。真实 UI 的“连接并自动拉起核心”按钮走同一套 `lib/core/services.dart`，自动连接钩子 `SONORA_AUTO_CONNECT=1` 可复现该路径。全程不需要人工启动 squeezelite。
+- macOS 本地网络权限：首次手动打开 `.app` 需允许“访问本地网络”，否则 socket 报 `No route to host`。Info.plist 已声明 `NSLocalNetworkUsageDescription`，bundle id 为 `com.songboxiang.sonora.v2`。无界面 SSH 进程无授权界面，因此该场景的验收用命令行探针或 root 进程完成。

@@ -66,7 +66,14 @@ class PlaybackStatus {
 class PlayerInfo {
   final String id;
   final String name;
-  const PlayerInfo({required this.id, required this.name});
+  /// 1 when the player is currently connected to LMS. Stale entries remain
+  /// in `players_loop` after a probe/core exits, so the UI must filter on this.
+  final bool connected;
+  const PlayerInfo({
+    required this.id,
+    required this.name,
+    this.connected = true,
+  });
 }
 
 class AlbumInfo {

@@ -31,6 +31,15 @@ void main() {
     expect(p.single.name, "客厅");
   });
 
+  test("parsePlayers keeps connected flag for stale entries", () {
+    final p = parsePlayers(j(
+        "{\"result\":{\"players_loop\":["
+        "{\"playerid\":\"a\",\"name\":\"live\",\"connected\":1},"
+        "{\"playerid\":\"b\",\"name\":\"stale\",\"connected\":0}]}}"));
+    expect(p.first.connected, isTrue);
+    expect(p.last.connected, isFalse);
+  });
+
   test("volume curve matches legacy app", () {
     expect(lmsToSlider(0), 0);
     expect(lmsToSlider(25), 50);

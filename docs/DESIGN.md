@@ -110,12 +110,15 @@ disconnected
 | 阶段 | 内容 | 验证方式 |
 |---|---|---|
 | M0 | models + protocol + transport + fixture 单测 + probe.dart | `dart test` 全绿；probe 对真实 LMS 输出 verdict |
-| M1 | 连接状态机 + 连接页 + 诊断输出 | probe + widget test；你在 VM 桌面确认页面 |
-| M2 | 播放器发现/选择 + 无播放器指引 | probe 显示 no_players 时 UI 有明确指引 |
-| M3 | playback status + 控制 + 进度条闭环 | §5 四个用例 + `probe --with-core` 自动拉起核心后 count 0→1 |
-| M4 | 打包 / 签名 / 归档 | `flutter build macos` |
+| P0（已完成） | 共享服务层 + 连接诊断页 + 自动拉起核心 + 播放控制/曲库只读列表 | `flutter analyze/test` 全绿；`probe --with-core` 与真实 UI 自动连接路径都显示在线播放器 1 个 |
+| M1 | widget test 与更细的状态机边界 | probe + widget test；你在 VM 桌面确认页面 |
+| M2 | 播放器选择持久化 + 无播放器指引 | probe 无在线播放器时 UI 有明确指引 |
+| M3 | Navidrome `clientStream` 音频闭环 | `just_audio` 播一首歌，进度/seek 正常 |
+| M4 | 打包 / 签名 / 归档 | `flutter build macos` + adhoc codesign + 去 quarantine |
 
-注意 M3 依赖一个**真实注册的播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起；如果 count 仍为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
+注意 P0/M3 依赖一个**真实在线播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起。LMS 的 `players count` 会把已断开的残留条目算进去，因此一律用 `connected == 1` 判定在线；若在线数为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
+
+macOS 本地网络权限：app 已声明 `NSLocalNetworkUsageDescription` 并使用独立 bundle id `com.songboxiang.sonora.v2`。首次手动打开时若系统询问“是否允许访问本地网络”，必须点允许，否则 LMS/Navidrome 连接会以 `No route to host` 失败。SSH 下的无界面进程没有授权界面，因此该场景的验证以命令行探针和 root 授权进程为准。
 
 ## 9. 明确不做
 

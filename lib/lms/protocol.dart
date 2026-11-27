@@ -49,6 +49,7 @@ List<PlayerInfo> parsePlayers(Map<String, dynamic> root) {
     return PlayerInfo(
       id: _str(m["playerid"]),
       name: _str(m["name"]).isEmpty ? _str(m["playerid"]) : _str(m["name"]),
+      connected: _int(m["connected"]) == 1,
     );
   }).toList();
 }
