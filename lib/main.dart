@@ -1,10 +1,12 @@
 import "dart:async";
+import "dart:convert";
 import "dart:io";
 
 import "package:flutter/material.dart";
 
 import "core/models.dart";
 import "core/services.dart";
+import "core/updates.dart";
 import "lms/protocol.dart";
 import "navidrome/audio.dart";
 import "navidrome/subsonic.dart";
@@ -63,6 +65,17 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   String _source = "lms";
   SongInfo? _currentSong;
 
+  // 升级页（主体 / 核心下载校验，不做自动替换）
+  final _appZipUrl = TextEditingController();
+  final _appSumsUrl = TextEditingController();
+  String _appCurrent = "2.1.0";
+  String _appLatest = "-";
+  List<String> _appNotes = <String>[];
+  VerifyResult? _appVerify;
+  String _coreCurrent = "-";
+  ReleaseAsset? _coreAsset;
+  VerifyResult? _coreVerify;
+
   @override
   void initState() {
     super.initState();
@@ -71,13 +84,29 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     // exercise the same connect path a user clicks, without GUI automation.
     final autoConnect = Platform.environment["SONORA_AUTO_CONNECT"] == "1";
     final autoPlay = Platform.environment["SONORA_AUTO_PLAY"] == "1";
-    if (autoConnect || autoPlay) {
+    final autoUpdate = Platform.environment["SONORA_AUTO_UPDATE"] == "1";
+    if (autoConnect || autoPlay || autoUpdate) {
       // ignore: avoid_print
       print("SONORA headless hooks armed");
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // ignore: avoid_print
         print("SONORA headless hooks firing");
-        unawaited(autoConnect ? _connect() : _autoPlayNavidrome());
+        if (autoUpdate) {
+          final zip = Platform.environment["SONORA_APP_ZIP"] ?? "";
+          final sums = Platform.environment["SONORA_APP_SUMS"] ?? "";
+          final core = Platform.environment["SONORA_CORE_VERIFY"] == "1";
+          unawaited(() async {
+            await _initUpdates();
+            if (zip.isNotEmpty) {
+              _appZipUrl.text = zip;
+              if (sums.isNotEmpty) _appSumsUrl.text = sums;
+              await _verifyAppDownload();
+            }
+            if (core) await _verifyCoreDownload();
+          }());
+        } else {
+          unawaited(autoConnect ? _connect() : _autoPlayNavidrome());
+        }
       });
     }
   }
@@ -90,6 +119,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     unawaited(_audio?.dispose());
     for (final c in <TextEditingController>[
       _host, _port, _slim, _user, _pass, _lmsCreds, _navHost, _navCreds,
+      _appZipUrl, _appSumsUrl,
     ]) {
       c.dispose();
     }
@@ -104,7 +134,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   void _log(String line) {
     final stamped = "${DateTime.now().toIso8601String().substring(11, 19)} $line";
     if (Platform.environment["SONORA_AUTO_CONNECT"] == "1" ||
-        Platform.environment["SONORA_AUTO_PLAY"] == "1") {
+        Platform.environment["SONORA_AUTO_PLAY"] == "1" ||
+        Platform.environment["SONORA_AUTO_UPDATE"] == "1") {
       // ignore: avoid_print
       print(stamped);
     }
@@ -113,6 +144,114 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _logs.add(stamped);
       if (_logs.length > 200) _logs.removeAt(0);
     });
+  }
+
+  /// 升级页初始化：读取当前版本，检查远端版本源。
+  Future<void> _initUpdates() async {
+    _appCurrent = _readAppVersion();
+    try {
+      final manifestPath = CoreRunner.bundledCorePath()
+              ?.replaceFirst("/squeezelite", "/core-manifest.json") ??
+          "";
+      final m = jsonDecode(File(manifestPath).readAsStringSync())
+          as Map<String, dynamic>;
+      _coreCurrent = "${m["version"]} r${m["revision"]}";
+    } catch (_) {
+      _coreCurrent = "未知";
+    }
+    await _checkUpdates();
+  }
+
+  String _readAppVersion() {
+    // 优先从运行中的 bundle Info.plist 读取；开发态回退到 pubspec 常量。
+    final exe = Platform.resolvedExecutable;
+    final m = RegExp(r"(.*\.app)/Contents/MacOS/[^/]+$").firstMatch(exe);
+    if (m != null) {
+      try {
+        final plist =
+            File("${m.group(1)}/Contents/Info.plist").readAsStringSync();
+        final v = RegExp(
+          r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>",
+        ).firstMatch(plist)?.group(1);
+        if (v != null && v.isNotEmpty) return v;
+      } catch (_) {}
+    }
+    return "2.1.0";
+  }
+
+  Future<void> _checkUpdates() async {
+    setState(() => _busy = true);
+    try {
+      final atom = await getText(
+        "https://github.com/songboxiang/sonora/releases.atom");
+      final v = parseReleaseVersion(atom);
+      if (!mounted) return;
+      setState(() {
+        _appLatest = v ?? "未知";
+        _appNotes = parseReleaseNotes(atom);
+      });
+      _log("主体最新版本：${v ?? '未知'}");
+    } catch (e) {
+      _log("主体版本检查失败 ${e.toString().split("\n").first}");
+      if (mounted) setState(() => _appLatest = "检查失败");
+    }
+    try {
+      final rss = await getText(
+        "https://sourceforge.net/projects/lmsclients/rss?path=/squeezelite/osx/m1");
+      final asset = parseCoreRss(rss);
+      if (!mounted) return;
+      setState(() => _coreAsset = asset);
+      _log("核心最新版本：${asset?.displayVersion ?? '未知'}"
+          " ${asset != null && asset.md5.isNotEmpty ? 'md5 可用' : 'md5 缺失'}");
+    } catch (e) {
+      _log("核心版本检查失败 ${e.toString().split("\n").first}");
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _verifyAppDownload() async {
+    final zipUrl = _appZipUrl.text.trim();
+    final sumsUrl = _appSumsUrl.text.trim();
+    if (zipUrl.isEmpty) {
+      _log("请填写主体 zip 下载地址");
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _appVerify = null;
+    });
+    _log("主体下载校验：$zipUrl");
+    final r = await verifyAppArchive(
+      zipUrl: zipUrl,
+      sumsUrl: sumsUrl.isEmpty ? null : sumsUrl,
+      onLog: _log,
+    );
+    if (!mounted) return;
+    setState(() {
+      _appVerify = r;
+      _busy = false;
+    });
+    _log("主体校验${r.ok ? '通过' : '失败'}（${r.stage}）：${r.detail}");
+  }
+
+  Future<void> _verifyCoreDownload() async {
+    final asset = _coreAsset;
+    if (asset == null) {
+      _log("请先检查更新以获取核心下载地址");
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _coreVerify = null;
+    });
+    _log("核心下载校验：${asset.filename}");
+    final r = await verifyCoreArchive(release: asset, onLog: _log);
+    if (!mounted) return;
+    setState(() {
+      _coreVerify = r;
+      _busy = false;
+    });
+    _log("核心校验${r.ok ? '通过' : '失败'}（${r.stage}）：${r.detail}");
   }
 
   void _importLmsCreds() {
@@ -523,7 +662,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         key: _scaffoldKey,
         appBar: AppBar(
@@ -533,6 +672,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               Tab(text: "连接"),
               Tab(text: "播放"),
               Tab(text: "曲库"),
+              Tab(text: "升级"),
             ],
           ),
           actions: <Widget>[
@@ -704,6 +844,70 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                       trailing: const Icon(Icons.play_arrow),
                       onTap: () => unawaited(_playNavidromeSong(s)),
                     ),
+                  ),
+                ],
+              ),
+            ),
+            SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text("主体（程序）", style: TextStyle(fontWeight: FontWeight.bold)),
+                  _statusRow("当前版本", _appCurrent),
+                  _statusRow("最新版本", _appLatest),
+                  if (_appNotes.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      padding: const EdgeInsets.all(8),
+                      color: Colors.grey.shade200,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: _appNotes
+                            .map((n) => Text("· $n", style: const TextStyle(fontSize: 12)))
+                            .toList(),
+                      ),
+                    ),
+                  _field("主体 zip 下载地址（留空则只检查版本）", _appZipUrl),
+                  _field("SHA256SUMS 地址（zip 同目录）", _appSumsUrl),
+                  ElevatedButton.icon(
+                    onPressed: _busy ? null : () => unawaited(_verifyAppDownload()),
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text("下载并校验主体"),
+                  ),
+                  if (_appVerify != null)
+                    _statusRow("主体校验",
+                        "${_appVerify!.ok ? '通过' : '失败'} · ${_appVerify!.stage} · ${_appVerify!.detail}"),
+                  const Divider(),
+                  const Text("Squeezelite 核心", style: TextStyle(fontWeight: FontWeight.bold)),
+                  _statusRow("当前版本", _coreCurrent),
+                  _statusRow("最新版本", _coreAsset?.displayVersion ?? "-"),
+                  _statusRow("来源", _coreAsset?.filename ?? "-"),
+                  ElevatedButton.icon(
+                    onPressed: _busy ? null : () => unawaited(_verifyCoreDownload()),
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text("下载并校验核心"),
+                  ),
+                  if (_coreVerify != null)
+                    _statusRow("核心校验",
+                        "${_coreVerify!.ok ? '通过' : '失败'} · ${_coreVerify!.stage} · ${_coreVerify!.detail}"),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: <Widget>[
+                      ElevatedButton.icon(
+                        onPressed: _busy ? null : () => unawaited(_checkUpdates()),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text("重新检查版本"),
+                      ),
+                    ],
+                  ),
+                  if (_busy) const LinearProgressIndicator(),
+                  const SizedBox(height: 12),
+                  const Text(
+                    "下载校验只验证 hash 与包结构，不会自动替换正在运行的程序或核心。"
+                    "替换由后续 UpdateHelper 完成。核心 md5 与文件大小来自 SourceForge RSS，无需手动填写。",
+                    style: TextStyle(fontSize: 12),
                   ),
                 ],
               ),
