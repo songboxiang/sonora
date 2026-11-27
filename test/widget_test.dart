@@ -7,6 +7,6 @@ void main() {
     await tester.pumpWidget(const SonoraApp());
     expect(find.text("连接 Lyrion Media Server"), findsOneWidget);
     expect(find.text("连接"), findsOneWidget);
-    expect(find.byType(TextField), findsNWidgets(2));
+    expect(find.byType(TextField), findsNWidgets(4));
   });
 }

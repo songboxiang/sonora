@@ -1,3 +1,5 @@
+import "dart:convert";
+import "dart:io";
 import "package:flutter/material.dart";
 import "lms/lms_client.dart";
 import "state/player_provider.dart";
@@ -33,13 +35,42 @@ class _HomeScreenState extends State<HomeScreen> {
   late final PlayerProvider _player;
   final _host = TextEditingController(text: "127.0.0.1");
   final _port = TextEditingController(text: "9000");
+  final _user = TextEditingController();
+  final _pass = TextEditingController();
   bool _configured = false;
+
+  File get _configFile => File(
+      "${Platform.environment['HOME']}/Library/Application Support/Sonora/config.json");
+
+  void _loadConfig() {
+    try {
+      if (!_configFile.existsSync()) return;
+      final m = jsonDecode(_configFile.readAsStringSync()) as Map<String, dynamic>;
+      _host.text = (m["host"] ?? _host.text).toString();
+      _port.text = (m["port"] ?? _port.text).toString();
+      _user.text = (m["user"] ?? "").toString();
+      _pass.text = (m["password"] ?? "").toString();
+    } catch (_) {}
+  }
+
+  void _saveConfig(LmsConfig cfg) {
+    try {
+      _configFile.parent.createSync(recursive: true);
+      _configFile.writeAsStringSync(jsonEncode({
+        "host": cfg.host,
+        "port": cfg.port,
+        "user": cfg.user,
+        "password": cfg.password,
+      }));
+    } catch (_) {}
+  }
 
   @override
   void initState() {
     super.initState();
     _client = LmsClient(const LmsConfig());
     _player = PlayerProvider(_client);
+    _loadConfig();
   }
 
   @override
@@ -48,6 +79,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _client.dispose();
     _host.dispose();
     _port.dispose();
+    _user.dispose();
+    _pass.dispose();
     super.dispose();
   }
 
@@ -55,9 +88,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final cfg = LmsConfig(
       host: _host.text.trim(),
       port: int.tryParse(_port.text.trim()) ?? 9000,
+      user: _user.text.trim(),
+      password: _pass.text,
     );
     await _player.connect(cfg);
     if (_player.connected) {
+      _saveConfig(cfg);
       setState(() => _configured = true);
       _player.startPolling();
     } else {
@@ -111,6 +147,13 @@ class _HomeScreenState extends State<HomeScreen> {
             TextField(controller: _port, keyboardType: TextInputType.number,
               decoration: const InputDecoration(
                 labelText: "端口", border: OutlineInputBorder())),
+            const SizedBox(height: 12),
+            TextField(controller: _user, decoration: const InputDecoration(
+              labelText: "用户名（可留空）", border: OutlineInputBorder())),
+            const SizedBox(height: 12),
+            TextField(controller: _pass, obscureText: true,
+              decoration: const InputDecoration(
+                labelText: "密码", border: OutlineInputBorder())),
             const SizedBox(height: 20),
             FilledButton(onPressed: _connect, child: const Text("连接")),
           ],

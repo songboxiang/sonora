@@ -119,7 +119,7 @@ class LmsClient {
     try {
       final req = await _http.postUrl(uri).timeout(timeout);
       req.headers.contentType = ContentType.json;
-      if (config.user.isNotEmpty) {
+      if (config.user.isNotEmpty || config.password.isNotEmpty) {
         final token = base64Encode(utf8.encode("${config.user}:${config.password}"));
         req.headers.set(HttpHeaders.authorizationHeader, "Basic $token");
       }
