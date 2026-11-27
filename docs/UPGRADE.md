@@ -189,4 +189,5 @@ update_available → downloading → verifying → staging → installing
 - `tool/probe_update.dart`：一条命令打印四条轨道的版本源可达性、解析结果、更新内容条数、最终 verdict。我在 SSH 里就能验收，不依赖截图。Navidrome 轨直接打 `192.168.199.2:4533/rest/ping` 取 `serverVersion`，并与 `releases.atom` 的最新 tag 比较。
 - 单测 fixture：`releases.atom`、`servers.json`、SourceForge RSS、`commits.atom`、旧版真实响应；版本比较覆盖 `9.1.1` / `2.0.0.1465` / `9.1.2 - 1792854063`。
 - 流水线集成测试（本地假文件）：成功、hash 不符、下载中断、健康检查失败回滚、清理清单完整性。
+- 深度曲库验收：`dart run tool/probe.dart --with-libs --lms-creds=<路径>` → 逐个 `getAlbum` 读取全部专辑详情与歌曲列表，打印每首歌名、艺人、时长、ID 与曲库汇总。
 - 真实验收：`dart run tool/probe.dart --with-core --lms-creds=<路径>` → 自动复制打包核心、拉起子进程、等待 LMS `players count` 从 0 变 1 → 播放/暂停/进度条拖动闭环。全程不需要人工启动 squeezelite。

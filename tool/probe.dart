@@ -41,6 +41,12 @@ void report(String name, String detail, bool ok) {
   print("[$mark] $name: $detail");
 }
 
+String formatDuration(int seconds) {
+  final m = seconds ~/ 60;
+  final s = seconds % 60;
+  return "$m:${s.toString().padLeft(2, "0")}";
+}
+
 class LmsTarget {
   LmsTarget({
     required this.host,
@@ -262,12 +268,36 @@ Future<void> checkNavidrome(List<String> args) async {
     report("Navidrome升级", "当前 ${info.version.split(' ').first} → 最新 ${latest ?? '未知'}"
         " ${up ? '可升级' : '已最新'}", latest != null);
 
+    final withLibs = args.contains("--with-libs");
     final albums = await getText("http://$host/rest/getAlbumList2?${Uri(queryParameters: auth.query({
-          "type": "newest", "size": "3",
+          "type": "newest", "size": withLibs ? "500" : "3",
         })).query}");
     final list = parseAlbumList(parseJson(albums), "http://$host");
     report("Navidrome曲库", "专辑 ${list.length} 张，首张 ${list.isEmpty ? '-' : list.first.name}",
         list.isNotEmpty);
+
+    if (withLibs) {
+      var totalSongs = 0;
+      for (final album in list) {
+        final detailQuery = Uri(queryParameters: auth.query({"id": album.id})).query;
+        final detailRaw = await getText("http://$host/rest/getAlbum?$detailQuery");
+        final songs = parseAlbum(parseJson(detailRaw));
+        totalSongs += songs.length;
+        report(
+          "专辑详情",
+          "${album.name} / ${album.artist.isEmpty ? '未知艺人' : album.artist}"
+          " — ${songs.length} 首 (id=${album.id})",
+          songs.isNotEmpty,
+        );
+        for (var i = 0; i < songs.length; i++) {
+          final song = songs[i];
+          print("    ${i + 1}. ${song.title}"
+              " — ${song.artist.isEmpty ? album.artist : song.artist}"
+              " [${formatDuration(song.duration)}] id=${song.id}");
+        }
+      }
+      report("曲库汇总", "共 ${list.length} 张专辑 / $totalSongs 首歌曲", totalSongs > 0);
+    }
   } catch (e) {
     report("Navidrome", "失败 ${e.toString().split('\n').first}", false);
   }
