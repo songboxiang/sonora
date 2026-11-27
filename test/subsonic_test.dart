@@ -1,0 +1,81 @@
+import "dart:convert";
+import "package:crypto/crypto.dart";
+import "package:flutter_test/flutter_test.dart";
+import "package:sonora/navidrome/subsonic.dart";
+
+Map<String, dynamic> j(String s) => jsonDecode(s) as Map<String, dynamic>;
+
+void main() {
+  group("SubsonicAuth", () {
+    const a = SubsonicAuth(user: "admin", password: "secret", salt: "abc123");
+    test("sends token, never password", () {
+      final q = a.query();
+      expect(q["u"], "admin");
+      expect(q["t"], a.token);
+      expect(q.containsKey("p"), isFalse);
+      expect(q["v"], "1.16.1");
+      expect(q["f"], "json");
+    });
+    test("token is md5 of password plus salt", () {
+      expect(a.token, md5.convert(utf8.encode("secret" "abc123")).toString());
+      expect(a.token.length, 32);
+    });
+  });
+
+  test("parsePing reads serverVersion", () {
+    final s = parsePing(j(
+        "{\"subsonic-response\":{\"status\":\"ok\",\"version\":\"1.16.1\","
+        "\"type\":\"navidrome\",\"serverVersion\":\"0.55.2 (a057a680)\","
+        "\"openSubsonic\":true}}"));
+    expect(s.type, "navidrome");
+    expect(s.version, "0.55.2 (a057a680)");
+    expect(s.reachable, isTrue);
+  });
+
+  test("parsePing reports failure message", () {
+    final s = parsePing(j(
+        "{\"subsonic-response\":{\"status\":\"failed\",\"error\":{\"code\":10,\"message\":\"missing parameter\"}}}"));
+    expect(s.reachable, isFalse);
+    expect(s.error, "missing parameter");
+  });
+
+  test("parseAlbumList builds cover url", () {
+    final list = parseAlbumList(j(
+        "{\"subsonic-response\":{\"albumList2\":{\"album\":["
+        "{\"id\":\"a1\",\"name\":\"情歌精选\",\"artist\":\"张国荣\",\"coverArt\":\"c1\"}]}}}"),
+        "http://192.168.199.2:4533");
+    expect(list.length, 1);
+    expect(list.first.name, "情歌精选");
+    expect(list.first.coverUrl,
+        "http://192.168.199.2:4533/rest/getCoverArt?id=c1&size=300");
+  });
+
+  test("parseAlbum reads songs", () {
+    final songs = parseAlbum(j(
+        "{\"subsonic-response\":{\"album\":{\"song\":["
+        "{\"id\":\"s1\",\"title\":\"爱如潮水\",\"artist\":\"张信哲\",\"duration\":289}]}}}"));
+    expect(songs.single.id, "s1");
+    expect(songs.single.duration, 289);
+  });
+
+  test("parseStructuredLyrics keeps timestamps", () {
+    final lines = parseStructuredLyrics(j(
+        "{\"subsonic-response\":{\"lyricsList\":{\"structuredLyrics\":["
+        "{\"line\":[{\"start\":1200,\"value\":\"第一行\"},{\"start\":3400,\"value\":\"第二行\"}]}]}}}"));
+    expect(lines.length, 2);
+    expect(lines.first.timeMs, 1200);
+    expect(lines.last.text, "第二行");
+  });
+
+  test("parsePlayQueue returns empty status when nothing plays", () {
+    final s = parsePlayQueue(j("{\"subsonic-response\":{\"playQueue\":{}}}"));
+    expect(s.mode, "stop");
+    expect(s.isPlaying, isFalse);
+  });
+
+  test("atom fallback skips feed title and finds version", () {
+    const xml = "<feed><title>Release notes from navidrome</title>"
+        "<entry><title>v0.64.2</title></entry></feed>";
+    expect(parseAtomLatestVersion(xml), "v0.64.2");
+  });
+}
