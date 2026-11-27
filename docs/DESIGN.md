@@ -114,7 +114,11 @@ disconnected
 | M1 | widget test 与更细的状态机边界 | probe + widget test；你在 VM 桌面确认页面 |
 | M2 | 播放器选择持久化 + 无播放器指引 | probe 无在线播放器时 UI 有明确指引 |
 | P1（已完成） | Navidrome `clientStream` 音频闭环：`NavidromeAudio` + `just_audio` + 曲库点歌播放 + 音源互斥 | CLI `/rest/stream` 返回 `audio/flac`；UI 自动播放加载 273s 流并 seek 到 136s，位置回读 136s |
-| M4 | 打包 / 签名 / 归档 | `flutter build macos` + adhoc codesign + 去 quarantine |
+| M4（已完成） | release 打包 / adhoc 签名 / zip+dmg 归档 / 安装到 `/Applications` | `bash tool/package.sh` 一条命令：`flutter analyze/test/build --release` → 核心 sha256 校验 → 核心单独 adhoc 签名 → 签名后回写 manifest → `--deep` 签整包 → 去 quarantine → `dist/Sonora-<ver>.zip` + `.dmg` + `SHA256SUMS`；安装版实测首次启动时从 bundle 自动复制核心，播放器 `connected=1` |
+
+发布版本：与主线延续，v2 重写版首个正式包为 **2.1.0**（`pubspec.yaml` 的 `version: 2.1.0+1`）；`CFBundleShortVersionString=2.1.0`，高于远端 `v2.0.18`。归档输出到 `dist/`（已 gitignore）。
+
+签名顺序要点：核心 `Resources/Core/squeezelite` 是裸 Mach-O，`codesign --deep` 不会自动签它，必须先单独 `codesign --force --sign -`；签名会改变文件 sha256，所以要在签整包**之前**用签名后 hash 回写 bundle 内的 `core-manifest.json`，否则 manifest 与实际分发核心不符、自检必然失败。
 
 注意 P0/M3 依赖一个**真实在线播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起。LMS 的 `players count` 会把已断开的残留条目算进去，因此一律用 `connected == 1` 判定在线；若在线数为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
 
