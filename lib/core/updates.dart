@@ -20,8 +20,10 @@ class ReleaseAsset {
   final int? revision;
   final String url;
   final String filename;
+
   /// MD5 of the downloaded archive, as advertised by the source (integrity only).
   final String md5;
+
   /// Advertised byte size of the downloaded archive, -1 when unknown.
   final int size;
   final List<String> notes;
@@ -38,14 +40,19 @@ class VerifyResult {
     this.path = "",
     this.sha256 = "",
     this.detail = "",
+    this.binaryPath = "",
   });
 
   final bool ok;
+
   /// Last completed stage: downloaded / hash / structure / verified / failed.
   final String stage;
   final String path;
   final String sha256;
   final String detail;
+
+  /// 可选：verifyCoreArchive(extractBinary: true) 时暂存的核心二进制路径。
+  final String binaryPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,9 +63,9 @@ class VerifyResult {
 String? parseReleaseVersion(String xml) {
   final entryRe = RegExp(r"<entry>.*?</entry>", dotAll: true);
   for (final m in entryRe.allMatches(xml)) {
-    final title = RegExp(r"<title>([^<]+)</title>")
-        .firstMatch(m.group(0) ?? "")
-        ?.group(1);
+    final title = RegExp(
+      r"<title>([^<]+)</title>",
+    ).firstMatch(m.group(0) ?? "")?.group(1);
     if (title != null && RegExp(r"^v?\d+\.\d+").hasMatch(title.trim())) {
       return title.trim();
     }
@@ -73,19 +80,27 @@ String? parseReleaseVersion(String xml) {
 
 /// Release note lines from the newest atom entry (falls back to all entries).
 List<String> parseReleaseNotes(String xml, {int max = 8}) {
-  final entry = RegExp(r"<entry>.*?</entry>", dotAll: true)
-      .firstMatch(xml)
-      ?.group(0);
+  final entry = RegExp(
+    r"<entry>.*?</entry>",
+    dotAll: true,
+  ).firstMatch(xml)?.group(0);
   final scope = entry ?? xml;
   final out = <String>[];
-  for (final m in RegExp(r"<content[^>]*>(.*?)</content>", dotAll: true)
-      .allMatches(scope)) {
+  for (final m in RegExp(
+    r"<content[^>]*>(.*?)</content>",
+    dotAll: true,
+  ).allMatches(scope)) {
     var text = m.group(1) ?? "";
     // Decode entities first: atom feeds often escape tags as &lt;br/&gt;.
-    text = text.replaceAll("&lt;", "<").replaceAll("&gt;", ">")
+    text = text
+        .replaceAll("&lt;", "<")
+        .replaceAll("&gt;", ">")
         .replaceAll("&amp;", "&");
     // Then treat HTML line breaks as newlines so notes render as separate lines.
-    text = text.replaceAll(RegExp(r"<br\s*/?>|</p>|</li>", caseSensitive: false), "\n");
+    text = text.replaceAll(
+      RegExp(r"<br\s*/?>|</p>|</li>", caseSensitive: false),
+      "\n",
+    );
     text = text.replaceAll(RegExp(r"<[^>]+>"), " ");
     for (final line in text.split(RegExp(r"\r?\n"))) {
       final clean = line.trim();
@@ -102,19 +117,24 @@ ReleaseAsset? parseCoreRss(String xml) {
   final items = RegExp(r"<item>(.*?)</item>", dotAll: true).allMatches(xml);
   for (final m in items) {
     final item = m.group(1) ?? "";
-    final rawTitle = RegExp(r"<title><!\[CDATA\[(.*?)\]\]></title>", dotAll: true)
-        .firstMatch(item)
-        ?.group(1);
-    final title = rawTitle ??
-        RegExp(r"<title>([^<]+)</title>").firstMatch(item)?.group(1) ?? "";
+    final rawTitle = RegExp(
+      r"<title><!\[CDATA\[(.*?)\]\]></title>",
+      dotAll: true,
+    ).firstMatch(item)?.group(1);
+    final title =
+        rawTitle ??
+        RegExp(r"<title>([^<]+)</title>").firstMatch(item)?.group(1) ??
+        "";
     if (!title.toLowerCase().endsWith(".dmg")) continue;
 
-    final link = RegExp(r"<link>([^<]+)</link>")
-        .firstMatch(item)
-        ?.group(1)?.trim() ?? "";
-    final md5 = RegExp(r'<media:hash[^>]*algo="md5"[^>]*>([^<]+)</media:hash>')
-        .firstMatch(item)
-        ?.group(1)?.trim() ?? "";
+    final link =
+        RegExp(r"<link>([^<]+)</link>").firstMatch(item)?.group(1)?.trim() ??
+        "";
+    final md5 =
+        RegExp(
+          r'<media:hash[^>]*algo="md5"[^>]*>([^<]+)</media:hash>',
+        ).firstMatch(item)?.group(1)?.trim() ??
+        "";
     final sizeRaw = RegExp(r'filesize="(\d+)"').firstMatch(item)?.group(1);
     final size = sizeRaw == null ? -1 : int.tryParse(sizeRaw) ?? -1;
     final parsed = _parseCoreVersionFromName(title);
@@ -229,8 +249,11 @@ Future<VerifyResult> verifyAppArchive({
 }) async {
   final dir = cacheDir ?? updateCacheDir("app", "incoming");
   try {
-    final zipPath = await downloadToFile(zipUrl, "$dir/download/Sonora.zip",
-        onLog: onLog);
+    final zipPath = await downloadToFile(
+      zipUrl,
+      "$dir/download/Sonora.zip",
+      onLog: onLog,
+    );
     String sha;
     if (sumsUrl != null) {
       final sumsRaw = await getText(sumsUrl);
@@ -240,25 +263,43 @@ Future<VerifyResult> verifyAppArchive({
         orElse: () => "",
       );
       if (name.isEmpty) {
-        return VerifyResult(ok: false, stage: "hash", path: zipPath,
-            detail: "SHA256SUMS 中没有 zip 条目");
+        return VerifyResult(
+          ok: false,
+          stage: "hash",
+          path: zipPath,
+          detail: "SHA256SUMS 中没有 zip 条目",
+        );
       }
       sha = await sha256File(zipPath);
       if (!hashMatches(actualHash: sha, expectedHash: sums[name]!)) {
-        return VerifyResult(ok: false, stage: "hash", path: zipPath, sha256: sha,
-            detail: "SHA256 不符：期望 ${sums[name]}，实际 $sha");
+        return VerifyResult(
+          ok: false,
+          stage: "hash",
+          path: zipPath,
+          sha256: sha,
+          detail: "SHA256 不符：期望 ${sums[name]}，实际 $sha",
+        );
       }
       onLog?.call("SHA256 校验通过 $sha");
     } else if (expectedSha != null && expectedSha.isNotEmpty) {
       sha = await sha256File(zipPath);
       if (!hashMatches(actualHash: sha, expectedHash: expectedSha)) {
-        return VerifyResult(ok: false, stage: "hash", path: zipPath, sha256: sha,
-            detail: "SHA256 不符：期望 $expectedSha，实际 $sha");
+        return VerifyResult(
+          ok: false,
+          stage: "hash",
+          path: zipPath,
+          sha256: sha,
+          detail: "SHA256 不符：期望 $expectedSha，实际 $sha",
+        );
       }
       onLog?.call("SHA256 校验通过 $sha");
     } else {
-      return VerifyResult(ok: false, stage: "hash", path: zipPath,
-          detail: "未提供 SHA256SUMS 或期望 hash，拒绝安装");
+      return VerifyResult(
+        ok: false,
+        stage: "hash",
+        path: zipPath,
+        detail: "未提供 SHA256SUMS 或期望 hash，拒绝安装",
+      );
     }
 
     // Structural sanity: a Sonora.app bundle with an Info.plist must be inside.
@@ -266,15 +307,28 @@ Future<VerifyResult> verifyAppArchive({
     final listing = listed.stdout.toString();
     if (listed.exitCode != 0 ||
         !RegExp(r"Sonora\.app/Contents/Info\.plist").hasMatch(listing)) {
-      return VerifyResult(ok: false, stage: "structure", path: zipPath,
-          sha256: sha, detail: "zip 内缺少 Sonora.app/Contents/Info.plist");
+      return VerifyResult(
+        ok: false,
+        stage: "structure",
+        path: zipPath,
+        sha256: sha,
+        detail: "zip 内缺少 Sonora.app/Contents/Info.plist",
+      );
     }
     onLog?.call("结构校验通过：含 Sonora.app/Contents/Info.plist");
-    return VerifyResult(ok: true, stage: "verified", path: zipPath, sha256: sha,
-        detail: "主体包下载并校验通过（未安装）");
+    return VerifyResult(
+      ok: true,
+      stage: "verified",
+      path: zipPath,
+      sha256: sha,
+      detail: "主体包下载并校验通过（未安装）",
+    );
   } catch (e) {
-    return VerifyResult(ok: false, stage: "failed",
-        detail: "失败 ${e.toString().split("\n").first}");
+    return VerifyResult(
+      ok: false,
+      stage: "failed",
+      detail: "失败 ${e.toString().split("\n").first}",
+    );
   }
 }
 
@@ -283,11 +337,17 @@ Future<VerifyResult> verifyAppArchive({
 Future<VerifyResult> verifyCoreArchive({
   required ReleaseAsset release,
   String? cacheDir,
+  bool extractBinary = false,
   void Function(String line)? onLog,
 }) async {
-  final dir = cacheDir ??
-      updateCacheDir("core", release.displayVersion.replaceAll(RegExp(r"\s"), ""));
-  final dmgPath = "$dir/download/${release.filename.isEmpty ? 'core.dmg' : release.filename}";
+  final dir =
+      cacheDir ??
+      updateCacheDir(
+        "core",
+        release.displayVersion.replaceAll(RegExp(r"\s"), ""),
+      );
+  final dmgPath =
+      "$dir/download/${release.filename.isEmpty ? 'core.dmg' : release.filename}";
   var mountPoint = "";
   try {
     await downloadToFile(release.url, dmgPath, onLog: onLog);
@@ -300,8 +360,13 @@ Future<VerifyResult> verifyCoreArchive({
       actualSize: size,
       expectedSize: release.size,
     )) {
-      return VerifyResult(ok: false, stage: "hash", path: dmgPath,
-          detail: "MD5/size 不符：期望 ${release.md5}/${release.size}B，实际 $md5/${size}B");
+      return VerifyResult(
+        ok: false,
+        stage: "hash",
+        path: dmgPath,
+        detail:
+            "MD5/size 不符：期望 ${release.md5}/${release.size}B，实际 $md5/${size}B",
+      );
     }
     onLog?.call("MD5 + filesize 校验通过");
 
@@ -309,24 +374,56 @@ Future<VerifyResult> verifyCoreArchive({
     mountPoint = "$dir/mnt";
     await Directory(mountPoint).create(recursive: true);
     final attach = await Process.run("hdiutil", [
-      "attach", dmgPath, "-mountpoint", mountPoint, "-nobrowse", "-readonly", "-quiet",
+      "attach",
+      dmgPath,
+      "-mountpoint",
+      mountPoint,
+      "-nobrowse",
+      "-readonly",
+      "-quiet",
     ]);
     if (attach.exitCode != 0) {
-      return VerifyResult(ok: false, stage: "structure", path: dmgPath,
-          detail: "挂载失败：${attach.stderr.toString().trim()}");
+      return VerifyResult(
+        ok: false,
+        stage: "structure",
+        path: dmgPath,
+        detail: "挂载失败：${attach.stderr.toString().trim()}",
+      );
     }
     final binary = "$mountPoint/Squeezelite.app/Contents/MacOS/Squeezelite";
     if (!File(binary).existsSync()) {
-      return VerifyResult(ok: false, stage: "structure", path: dmgPath,
-          detail: "dmg 内缺少 Squeezelite.app/Contents/MacOS/Squeezelite");
+      return VerifyResult(
+        ok: false,
+        stage: "structure",
+        path: dmgPath,
+        detail: "dmg 内缺少 Squeezelite.app/Contents/MacOS/Squeezelite",
+      );
     }
     final binarySha = await sha256File(binary);
     onLog?.call("核心二进制 sha256=$binarySha");
-    return VerifyResult(ok: true, stage: "verified", path: dmgPath,
-        sha256: binarySha, detail: "核心包下载并校验通过（未安装）");
+    var extracted = "";
+    if (extractBinary) {
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      extracted = "$dir/stage/$stamp/squeezelite";
+      await File(extracted).parent.create(recursive: true);
+      await File(binary).copy(extracted);
+      await Process.run("chmod", ["755", extracted]);
+      onLog?.call("核心已暂存到 $extracted");
+    }
+    return VerifyResult(
+      ok: true,
+      stage: "verified",
+      path: dmgPath,
+      sha256: binarySha,
+      binaryPath: extracted,
+      detail: extractBinary ? "核心包校验通过并已暂存（未安装）" : "核心包下载并校验通过（未安装）",
+    );
   } catch (e) {
-    return VerifyResult(ok: false, stage: "failed",
-        detail: "失败 ${e.toString().split("\n").first}");
+    return VerifyResult(
+      ok: false,
+      stage: "failed",
+      detail: "失败 ${e.toString().split("\n").first}",
+    );
   } finally {
     if (mountPoint.isNotEmpty) {
       await Process.run("hdiutil", ["detach", mountPoint, "-quiet"]);

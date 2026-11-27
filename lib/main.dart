@@ -1,11 +1,11 @@
 import "dart:async";
-import "dart:convert";
 import "dart:io";
 
 import "package:flutter/material.dart";
 
 import "core/models.dart";
 import "core/services.dart";
+import "core/installer.dart";
 import "core/updates.dart";
 import "lms/protocol.dart";
 import "navidrome/audio.dart";
@@ -21,7 +21,9 @@ class SonoraApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: "Sonora v2",
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo)),
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+      ),
       home: const SonoraHome(),
     );
   }
@@ -42,10 +44,12 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   final _user = TextEditingController();
   final _pass = TextEditingController();
   final _lmsCreds = TextEditingController(
-      text: "/Users/song/.squeezelite_gui/config.json");
+    text: "/Users/song/.squeezelite_gui/config.json",
+  );
   final _navHost = TextEditingController(text: "192.168.199.2:4533");
   final _navCreds = TextEditingController(
-      text: "/Users/song/navidrome_creds.json");
+    text: "/Users/song/navidrome_creds.json",
+  );
 
   LmsTarget? _target;
   CoreRunner? _runner;
@@ -75,6 +79,13 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   String _coreCurrent = "-";
   ReleaseAsset? _coreAsset;
   VerifyResult? _coreVerify;
+  UpdateInstaller? _installer;
+  InstallResult? _appInstall;
+  InstallResult? _coreInstall;
+  List<BackupRecord> _appBackups = <BackupRecord>[];
+  List<BackupRecord> _coreBackups = <BackupRecord>[];
+  String? _appBackupId;
+  String? _coreBackupId;
 
   @override
   void initState() {
@@ -101,8 +112,22 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               _appZipUrl.text = zip;
               if (sums.isNotEmpty) _appSumsUrl.text = sums;
               await _verifyAppDownload();
+              if (Platform.environment["SONORA_APP_INSTALL"] == "1") {
+                await _installApp();
+                if (Platform.environment["SONORA_ROLLBACK"] == "1") {
+                  await _rollbackApp();
+                }
+              }
             }
-            if (core) await _verifyCoreDownload();
+            if (core) {
+              await _verifyCoreDownload();
+              if (Platform.environment["SONORA_CORE_INSTALL"] == "1") {
+                await _installCore();
+                if (Platform.environment["SONORA_ROLLBACK"] == "1") {
+                  await _rollbackCore();
+                }
+              }
+            }
           }());
         } else {
           unawaited(autoConnect ? _connect() : _autoPlayNavidrome());
@@ -118,8 +143,16 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     unawaited(_runner?.stop());
     unawaited(_audio?.dispose());
     for (final c in <TextEditingController>[
-      _host, _port, _slim, _user, _pass, _lmsCreds, _navHost, _navCreds,
-      _appZipUrl, _appSumsUrl,
+      _host,
+      _port,
+      _slim,
+      _user,
+      _pass,
+      _lmsCreds,
+      _navHost,
+      _navCreds,
+      _appZipUrl,
+      _appSumsUrl,
     ]) {
       c.dispose();
     }
@@ -132,7 +165,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   }
 
   void _log(String line) {
-    final stamped = "${DateTime.now().toIso8601String().substring(11, 19)} $line";
+    final stamped =
+        "${DateTime.now().toIso8601String().substring(11, 19)} $line";
     if (Platform.environment["SONORA_AUTO_CONNECT"] == "1" ||
         Platform.environment["SONORA_AUTO_PLAY"] == "1" ||
         Platform.environment["SONORA_AUTO_UPDATE"] == "1") {
@@ -149,17 +183,87 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   /// 升级页初始化：读取当前版本，检查远端版本源。
   Future<void> _initUpdates() async {
     _appCurrent = _readAppVersion();
-    try {
-      final manifestPath = CoreRunner.bundledCorePath()
-              ?.replaceFirst("/squeezelite", "/core-manifest.json") ??
-          "";
-      final m = jsonDecode(File(manifestPath).readAsStringSync())
-          as Map<String, dynamic>;
-      _coreCurrent = "${m["version"]} r${m["revision"]}";
-    } catch (_) {
-      _coreCurrent = "未知";
-    }
+    _ensureInstaller();
+    _reloadCoreVersion();
+    _refreshBackups();
     await _checkUpdates();
+  }
+
+  /// 升级服务惰性初始化；headless 可用环境变量注入假安装目标。
+  UpdateInstaller _ensureInstaller() {
+    final existing = _installer;
+    if (existing != null) return existing;
+    final created = UpdateInstaller(
+      appTarget: Platform.environment["SONORA_APP_TARGET"],
+      coreTarget: Platform.environment["SONORA_CORE_TARGET"],
+      onLog: _log,
+    );
+    _installer = created;
+    return created;
+  }
+
+  /// 用户目录的 manifest 优先于 bundle 内置清单，反映真实已装核心。
+  void _reloadCoreVersion() {
+    final user = readCoreManifest(userCoreManifestPath());
+    final bundledPath =
+        CoreRunner.bundledCorePath()?.replaceFirst(
+          "/squeezelite",
+          "/core-manifest.json",
+        ) ??
+        "";
+    final m = user ?? readCoreManifest(bundledPath);
+    if (m == null) {
+      _coreCurrent = "未知";
+      return;
+    }
+    final v = (m["version"] ?? "未知").toString();
+    final rev = m["revision"];
+    _coreCurrent = rev == null ? v : "$v r$rev";
+  }
+
+  void _refreshBackups() {
+    final ins = _ensureInstaller();
+    final apps = ins.listBackups(UpdateTrack.app);
+    final cores = ins.listBackups(UpdateTrack.core);
+    if (!mounted) return;
+    setState(() {
+      _appBackups = apps;
+      _coreBackups = cores;
+      if (_appBackupId == null || !apps.any((b) => b.id == _appBackupId)) {
+        _appBackupId = apps.isEmpty ? null : apps.first.id;
+      }
+      if (_coreBackupId == null || !cores.any((b) => b.id == _coreBackupId)) {
+        _coreBackupId = cores.isEmpty ? null : cores.first.id;
+      }
+    });
+  }
+
+  Widget _backupSelector(
+    List<BackupRecord> backups,
+    String? value,
+    ValueChanged<String?> onChanged,
+  ) {
+    final valid = value != null && backups.any((b) => b.id == value)
+        ? value
+        : null;
+    return DropdownButton<String>(
+      value: valid,
+      hint: const Text("选择备份版本"),
+      isExpanded: true,
+      items: backups.map((b) {
+        final when = b.createdAt.length >= 19
+            ? b.createdAt.substring(0, 19).replaceFirst("T", " ")
+            : b.createdAt;
+        return DropdownMenuItem<String>(
+          value: b.id,
+          child: Text(
+            "${b.version} · $when",
+            style: const TextStyle(fontSize: 12),
+          ),
+        );
+      }).toList(),
+      onChanged: backups.isEmpty ? null : onChanged,
+    );
   }
 
   String _readAppVersion() {
@@ -168,8 +272,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     final m = RegExp(r"(.*\.app)/Contents/MacOS/[^/]+$").firstMatch(exe);
     if (m != null) {
       try {
-        final plist =
-            File("${m.group(1)}/Contents/Info.plist").readAsStringSync();
+        final plist = File(
+          "${m.group(1)}/Contents/Info.plist",
+        ).readAsStringSync();
         final v = RegExp(
           r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>",
         ).firstMatch(plist)?.group(1);
@@ -183,7 +288,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     setState(() => _busy = true);
     try {
       final atom = await getText(
-        "https://github.com/songboxiang/sonora/releases.atom");
+        "https://github.com/songboxiang/sonora/releases.atom",
+      );
       final v = parseReleaseVersion(atom);
       if (!mounted) return;
       setState(() {
@@ -197,12 +303,15 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
     try {
       final rss = await getText(
-        "https://sourceforge.net/projects/lmsclients/rss?path=/squeezelite/osx/m1");
+        "https://sourceforge.net/projects/lmsclients/rss?path=/squeezelite/osx/m1",
+      );
       final asset = parseCoreRss(rss);
       if (!mounted) return;
       setState(() => _coreAsset = asset);
-      _log("核心最新版本：${asset?.displayVersion ?? '未知'}"
-          " ${asset != null && asset.md5.isNotEmpty ? 'md5 可用' : 'md5 缺失'}");
+      _log(
+        "核心最新版本：${asset?.displayVersion ?? '未知'}"
+        " ${asset != null && asset.md5.isNotEmpty ? 'md5 可用' : 'md5 缺失'}",
+      );
     } catch (e) {
       _log("核心版本检查失败 ${e.toString().split("\n").first}");
     }
@@ -252,6 +361,100 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _busy = false;
     });
     _log("核心校验${r.ok ? '通过' : '失败'}（${r.stage}）：${r.detail}");
+  }
+
+  Future<void> _installApp() async {
+    final v = _appVerify;
+    if (v == null || !v.ok) {
+      _log("请先下载并校验主体，再执行替换");
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    final r = await _ensureInstaller().installApp(
+      zipPath: v.path,
+      expectedSha: v.sha256,
+    );
+    if (!mounted) return;
+    setState(() {
+      _appInstall = r;
+      _busy = false;
+    });
+    _refreshBackups();
+    _log("主体替换${r.ok ? '成功' : '失败'}（${r.stage}）：${r.detail}");
+  }
+
+  Future<void> _installCore() async {
+    final v = _coreVerify;
+    final asset = _coreAsset;
+    if (v == null || !v.ok || v.binaryPath.isEmpty || asset == null) {
+      _log("请先下载并校验核心，再执行替换");
+      return;
+    }
+    final wasRunning = _runner?.isRunning ?? false;
+    if (wasRunning) await _stopCore();
+    if (mounted) setState(() => _busy = true);
+    late final InstallResult r;
+    try {
+      r = await _ensureInstaller().installCore(
+        verification: v,
+        version: asset.version,
+        revision: asset.revision,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (wasRunning && r.ok && _target != null) await _startCore(_target!);
+    if (!mounted) return;
+    setState(() => _coreInstall = r);
+    _reloadCoreVersion();
+    _refreshBackups();
+    _log("核心替换${r.ok ? '成功' : '失败'}（${r.stage}）：${r.detail}");
+  }
+
+  Future<void> _rollbackApp() async {
+    final id = _appBackupId;
+    if (id == null) {
+      _log("没有可回滚的主体备份");
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    final r = await _ensureInstaller().rollback(
+      track: UpdateTrack.app,
+      backupId: id,
+    );
+    if (!mounted) return;
+    setState(() {
+      _appInstall = r;
+      _busy = false;
+    });
+    _refreshBackups();
+    _log("主体回滚${r.ok ? '成功' : '失败'}（${r.stage}）：${r.detail}");
+  }
+
+  Future<void> _rollbackCore() async {
+    final id = _coreBackupId;
+    if (id == null) {
+      _log("没有可回滚的核心备份");
+      return;
+    }
+    final wasRunning = _runner?.isRunning ?? false;
+    if (wasRunning) await _stopCore();
+    if (mounted) setState(() => _busy = true);
+    late final InstallResult r;
+    try {
+      r = await _ensureInstaller().rollback(
+        track: UpdateTrack.core,
+        backupId: id,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (wasRunning && r.ok && _target != null) await _startCore(_target!);
+    if (!mounted) return;
+    setState(() => _coreInstall = r);
+    _reloadCoreVersion();
+    _refreshBackups();
+    _log("核心回滚${r.ok ? '成功' : '失败'}（${r.stage}）：${r.detail}");
   }
 
   void _importLmsCreds() {
@@ -340,7 +543,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       setState(() => _coreStatus = "已启动 pid=${p.pid}");
       _log("核心已自动拉起 pid=${p.pid}");
 
-      final before = await lmsPlayerCount(target, onError: (m) => _log("播放器 $m"));
+      final before = await lmsPlayerCount(
+        target,
+        onError: (m) => _log("播放器 $m"),
+      );
       if (!mounted) return;
       setState(() => _playerCount = before);
       _log("播放器 count=$before（可能含离线残留）");
@@ -497,10 +703,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       await _audio?.setVolume(value / 100.0);
       return;
     }
-    await _command(
-      ["mixer", "volume", sliderToLms(value).toString()],
-      "音量 $value",
-    );
+    await _command([
+      "mixer",
+      "volume",
+      sliderToLms(value).toString(),
+    ], "音量 $value");
   }
 
   Future<void> _skip(int delta) async {
@@ -508,10 +715,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       await _skipNavidrome(delta);
       return;
     }
-    await _command(
-      ["playlist", "jump", delta > 0 ? "+1" : "-1"],
-      delta > 0 ? "下一首" : "上一首",
-    );
+    await _command([
+      "playlist",
+      "jump",
+      delta > 0 ? "+1" : "-1",
+    ], delta > 0 ? "下一首" : "上一首");
   }
 
   Future<void> _skipNavidrome(int delta) async {
@@ -600,9 +808,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     if (target == null) return;
     setState(() => _busy = true);
     try {
-      final info = await probeNavidrome(target, onError: (m) => _log("Navidrome $m"));
-      _log("Navidrome ${info.version.isEmpty ? '未知版本' : info.version} "
-          "${info.reachable ? 'ok' : '失败'}");
+      final info = await probeNavidrome(
+        target,
+        onError: (m) => _log("Navidrome $m"),
+      );
+      _log(
+        "Navidrome ${info.version.isEmpty ? '未知版本' : info.version} "
+        "${info.reachable ? 'ok' : '失败'}",
+      );
       final albums = await fetchNavidromeAlbums(
         target,
         onError: (m) => _log("曲库 $m"),
@@ -631,8 +844,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _log("${album.name}：${songs.length} 首");
   }
 
-  Widget _field(String label, TextEditingController controller,
-      {bool obscure = false}) {
+  Widget _field(
+    String label,
+    TextEditingController controller, {
+    bool obscure = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: TextField(
@@ -699,7 +915,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                     itemCount: _logs.length,
                     itemBuilder: (context, i) => Text(
                       _logs.reversed.toList()[i],
-                      style: const TextStyle(fontSize: 11, fontFamily: "monospace"),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontFamily: "monospace",
+                      ),
                     ),
                   ),
                 ),
@@ -759,7 +978,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text("音源：${_source == "navidrome" ? "Navidrome 客户端流" : "LMS 外部播放器"}"),
+                  Text(
+                    "音源：${_source == "navidrome" ? "Navidrome 客户端流" : "LMS 外部播放器"}",
+                  ),
                   Text(
                     _status.title.isEmpty ? "未播放" : _status.title,
                     style: Theme.of(context).textTheme.headlineSmall,
@@ -767,14 +988,18 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   Text(_status.artist.isEmpty ? "" : "艺人：${_status.artist}"),
                   Text(_status.album.isEmpty ? "" : "专辑：${_status.album}"),
                   const SizedBox(height: 12),
-                  Text("${formatDuration(_status.position)} / ${formatDuration(_status.duration)}"),
+                  Text(
+                    "${formatDuration(_status.position)} / ${formatDuration(_status.duration)}",
+                  ),
                   Slider(
                     value: _status.duration == 0
                         ? 0
                         : (_status.position > _status.duration
-                            ? _status.duration.toDouble()
-                            : _status.position.toDouble()),
-                    max: _status.duration == 0 ? 1 : _status.duration.toDouble(),
+                              ? _status.duration.toDouble()
+                              : _status.position.toDouble()),
+                    max: _status.duration == 0
+                        ? 1
+                        : _status.duration.toDouble(),
                     onChanged: (_) {},
                     onChangeEnd: (v) => unawaited(_seek(v.round())),
                   ),
@@ -786,9 +1011,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                         onPressed: () => unawaited(_skip(-1)),
                       ),
                       IconButton(
-                        icon: Icon(_status.isPlaying
-                            ? Icons.pause_circle_filled
-                            : Icons.play_circle_filled),
+                        icon: Icon(
+                          _status.isPlaying
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_filled,
+                        ),
                         iconSize: 40,
                         onPressed: () => unawaited(_togglePlay()),
                       ),
@@ -799,9 +1026,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                     ],
                   ),
                   const Divider(),
-                  Text(_source == "navidrome"
-                      ? "音量（客户端流 $_volume%）"
-                      : "音量（界面值 $_volume / LMS 值 ${sliderToLms(_volume)}）"),
+                  Text(
+                    _source == "navidrome"
+                        ? "音量（客户端流 $_volume%）"
+                        : "音量（界面值 $_volume / LMS 值 ${sliderToLms(_volume)}）",
+                  ),
                   Slider(
                     value: _volume.toDouble(),
                     min: 0,
@@ -840,7 +1069,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                     (s) => ListTile(
                       title: Text(s.title),
                       subtitle: Text(
-                          "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}"),
+                        "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
+                      ),
                       trailing: const Icon(Icons.play_arrow),
                       onTap: () => unawaited(_playNavidromeSong(s)),
                     ),
@@ -853,7 +1083,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text("主体（程序）", style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    "主体（程序）",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   _statusRow("当前版本", _appCurrent),
                   _statusRow("最新版本", _appLatest),
                   if (_appNotes.isNotEmpty)
@@ -864,39 +1097,108 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: _appNotes
-                            .map((n) => Text("· $n", style: const TextStyle(fontSize: 12)))
+                            .map(
+                              (n) => Text(
+                                "· $n",
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            )
                             .toList(),
                       ),
                     ),
                   _field("主体 zip 下载地址（留空则只检查版本）", _appZipUrl),
                   _field("SHA256SUMS 地址（zip 同目录）", _appSumsUrl),
                   ElevatedButton.icon(
-                    onPressed: _busy ? null : () => unawaited(_verifyAppDownload()),
+                    onPressed: _busy
+                        ? null
+                        : () => unawaited(_verifyAppDownload()),
                     icon: const Icon(Icons.download_outlined),
                     label: const Text("下载并校验主体"),
                   ),
                   if (_appVerify != null)
-                    _statusRow("主体校验",
-                        "${_appVerify!.ok ? '通过' : '失败'} · ${_appVerify!.stage} · ${_appVerify!.detail}"),
+                    _statusRow(
+                      "主体校验",
+                      "${_appVerify!.ok ? '通过' : '失败'} · ${_appVerify!.stage} · ${_appVerify!.detail}",
+                    ),
+                  const SizedBox(height: 6),
+                  ElevatedButton.icon(
+                    onPressed: (_busy || _appVerify?.ok != true)
+                        ? null
+                        : () => unawaited(_installApp()),
+                    icon: const Icon(Icons.swap_horiz),
+                    label: const Text("安装替换主体"),
+                  ),
+                  if (_appInstall != null)
+                    _statusRow(
+                      "主体替换",
+                      "${_appInstall!.ok ? '成功' : '失败'} · ${_appInstall!.stage} · ${_appInstall!.detail}",
+                    ),
+                  if (_appBackups.isNotEmpty) ...<Widget>[
+                    _backupSelector(_appBackups, _appBackupId, (v) {
+                      if (mounted) setState(() => _appBackupId = v);
+                    }),
+                    ElevatedButton.icon(
+                      onPressed: _busy ? null : () => unawaited(_rollbackApp()),
+                      icon: const Icon(Icons.undo),
+                      label: const Text("回滚主体"),
+                    ),
+                  ],
                   const Divider(),
-                  const Text("Squeezelite 核心", style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    "Squeezelite 核心",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   _statusRow("当前版本", _coreCurrent),
                   _statusRow("最新版本", _coreAsset?.displayVersion ?? "-"),
                   _statusRow("来源", _coreAsset?.filename ?? "-"),
                   ElevatedButton.icon(
-                    onPressed: _busy ? null : () => unawaited(_verifyCoreDownload()),
+                    onPressed: _busy
+                        ? null
+                        : () => unawaited(_verifyCoreDownload()),
                     icon: const Icon(Icons.download_outlined),
                     label: const Text("下载并校验核心"),
                   ),
                   if (_coreVerify != null)
-                    _statusRow("核心校验",
-                        "${_coreVerify!.ok ? '通过' : '失败'} · ${_coreVerify!.stage} · ${_coreVerify!.detail}"),
+                    _statusRow(
+                      "核心校验",
+                      "${_coreVerify!.ok ? '通过' : '失败'} · ${_coreVerify!.stage} · ${_coreVerify!.detail}",
+                    ),
+                  const SizedBox(height: 6),
+                  ElevatedButton.icon(
+                    onPressed:
+                        (_busy ||
+                            _coreVerify?.ok != true ||
+                            _coreVerify!.binaryPath.isEmpty)
+                        ? null
+                        : () => unawaited(_installCore()),
+                    icon: const Icon(Icons.swap_horiz),
+                    label: const Text("安装替换核心"),
+                  ),
+                  if (_coreInstall != null)
+                    _statusRow(
+                      "核心替换",
+                      "${_coreInstall!.ok ? '成功' : '失败'} · ${_coreInstall!.stage} · ${_coreInstall!.detail}",
+                    ),
+                  if (_coreBackups.isNotEmpty) ...<Widget>[
+                    _backupSelector(_coreBackups, _coreBackupId, (v) {
+                      if (mounted) setState(() => _coreBackupId = v);
+                    }),
+                    ElevatedButton.icon(
+                      onPressed: _busy
+                          ? null
+                          : () => unawaited(_rollbackCore()),
+                      icon: const Icon(Icons.undo),
+                      label: const Text("回滚核心"),
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     children: <Widget>[
                       ElevatedButton.icon(
-                        onPressed: _busy ? null : () => unawaited(_checkUpdates()),
+                        onPressed: _busy
+                            ? null
+                            : () => unawaited(_checkUpdates()),
                         icon: const Icon(Icons.refresh),
                         label: const Text("重新检查版本"),
                       ),
@@ -905,8 +1207,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   if (_busy) const LinearProgressIndicator(),
                   const SizedBox(height: 12),
                   const Text(
-                    "下载校验只验证 hash 与包结构，不会自动替换正在运行的程序或核心。"
-                    "替换由后续 UpdateHelper 完成。核心 md5 与文件大小来自 SourceForge RSS，无需手动填写。",
+                    "替换前自动备份到 ~/Library/Application Support/Sonora/Backups；"
+                    "健康检查失败会尝试自动回滚，也可在上方手动选择备份回滚。"
+                    "主体替换需重启生效；核心替换会短暂停止核心并自动拉起。"
+                    "核心 md5 / 文件大小来自 SourceForge RSS，无需手动填写。",
                     style: TextStyle(fontSize: 12),
                   ),
                 ],

@@ -116,6 +116,7 @@ disconnected
 | P1（已完成） | Navidrome `clientStream` 音频闭环：`NavidromeAudio` + `just_audio` + 曲库点歌播放 + 音源互斥 | CLI `/rest/stream` 返回 `audio/flac`；UI 自动播放加载 273s 流并 seek 到 136s，位置回读 136s |
 | M4（已完成） | release 打包 / adhoc 签名 / zip+dmg 归档 / 安装到 `/Applications` | `bash tool/package.sh` 一条命令：`flutter analyze/test/build --release` → 核心 sha256 校验 → 核心单独 adhoc 签名 → 签名后回写 manifest → `--deep` 签整包 → 去 quarantine → `dist/Sonora-<ver>.zip` + `.dmg` + `SHA256SUMS`；安装版实测首次启动时从 bundle 自动复制核心，播放器 `connected=1` |
 | U1（已完成） | 升级页主体/核心两轨「下载 + 校验」，不自动替换 | `lib/core/updates.dart`：atom 版本/发布说明、SourceForge RSS（版本+md5+filesize+链接）纯解析 + 单测；`verifyAppArchive`（下载 zip → SHA256SUMS 校验 → zip 内含 `Sonora.app/Contents/Info.plist`）、`verifyCoreArchive`（下载 dmg → md5+size → 挂载 → 二进制 sha256）→ `VerifyResult`。UI 新增第 4 个「升级」页签，headless 钩子 `SONORA_AUTO_UPDATE=1` + `SONORA_APP_ZIP`/`SONORA_APP_SUMS`/`SONORA_CORE_VERIFY`。端到端实测：主体 19MB zip（SHA256+结构通过）、核心 2.3MB dmg（md5+size+sha256 通过）；篡改 zip 被 SHA256 拒绝停在 hash 阶段 |
+| U2（已完成） | 主体/核心「替换 + 回滚」：`lib/core/installer.dart` 备份→暂存→同目录 rename 交换→健康检查→失败自动回滚；两轨均支持按备份 ID 手动回滚 | `dart run tool/probe_install.dart` 在临时目录模拟 `/Applications` 与用户核心目录：主体 2.0.18→2.1.0 替换成功、回滚回 2.0.18；核心 dmg 校验→签名→安装后 hash=`244e440d...`，手动回滚恢复原 hash=`46857580...`；模拟健康检查失败时 `rolledBack=true` 且旧二进制 hash 完整恢复。UI 第 4 页签新增「安装替换主体 / 核心」「回滚主体 / 核心」与备份选择器；headless 追加 `SONORA_APP_INSTALL` / `SONORA_CORE_INSTALL` / `SONORA_ROLLBACK` 与假目标路径注入 |
 
 发布版本：与主线延续，v2 重写版首个正式包为 **2.1.0**（`pubspec.yaml` 的 `version: 2.1.0+1`）；`CFBundleShortVersionString=2.1.0`，高于远端 `v2.0.18`。归档输出到 `dist/`（已 gitignore）。
 
@@ -123,7 +124,7 @@ disconnected
 
 注意 P0/M3 依赖一个**真实在线播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起。LMS 的 `players count` 会把已断开的残留条目算进去，因此一律用 `connected == 1` 判定在线；若在线数为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
 
-升级轨数据来源约束：`github.com/songboxiang/sonora` 只有 tag 没有正式 GitHub Release，Releases API 返回 404，`releases.atom` 只给版本号与 tag 链接、没有 asset 地址。因此主体下载 URL 由升级页手动填写（配合 `SHA256SUMS` 地址），校验逻辑不假设任何固定下载地址；远端确实发布 asset 后可直接填入。核心轨相反，SourceForge RSS 自带 md5/filesize/下载链接，全自动。两轨都只下载校验、不做替换——替换属于后续 `UpdateHelper`。
+升级轨数据来源约束：`github.com/songboxiang/sonora` 只有 tag 没有正式 GitHub Release，Releases API 返回 404，`releases.atom` 只给版本号与 tag 链接、没有 asset 地址。因此主体下载 URL 由升级页手动填写（配合 `SHA256SUMS` 地址），校验逻辑不假设任何固定下载地址；远端确实发布 asset 后可直接填入。核心轨相反，SourceForge RSS 自带 md5/filesize/下载链接，全自动。两轨下载校验后可直接替换，见 U2。
 
 macOS 本地网络权限：app 已声明 `NSLocalNetworkUsageDescription` 并使用独立 bundle id `com.songboxiang.sonora.v2`。首次手动打开时若系统询问“是否允许访问本地网络”，必须点允许，否则 LMS/Navidrome 连接会以 `No route to host` 失败。SSH 下的无界面进程没有授权界面，因此该场景的验证以命令行探针和 root 授权进程为准。
 
