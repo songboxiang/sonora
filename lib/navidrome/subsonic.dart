@@ -105,6 +105,12 @@ List<AlbumInfo> parseAlbumList(
       artist: _str(m["artist"]),
       artistId: _str(m["artistId"]),
       coverUrl: _coverUrl(base, auth, _str(m["coverArt"])),
+      year: _int(m["year"]),
+      genre: _str(m["genre"]),
+      songCount: _int(m["songCount"]),
+      duration: _int(m["duration"]),
+      playCount: _int(m["playCount"]),
+      sortName: _str(m["sortName"]),
     );
   }).toList();
 }
@@ -128,6 +134,13 @@ List<SongInfo> parseAlbum(
           ? ""
           : _coverUrl(base, auth, _str(m["coverArt"]), 300),
       audio: AudioInfo.fromSubsonic(m),
+      track: _int(m["track"]),
+      disc: _int(m["discNumber"]),
+      year: _int(m["year"]),
+      genre: _str(m["genre"]),
+      path: _str(m["path"]),
+      size: _int(m["size"]),
+      playCount: _int(m["playCount"]),
     );
   }).toList();
 }
@@ -147,6 +160,12 @@ List<AlbumInfo> parseSearch3Albums(
       artist: _str(m["artist"]),
       artistId: _str(m["artistId"]),
       coverUrl: _coverUrl(base, auth, _str(m["coverArt"])),
+      year: _int(m["year"]),
+      genre: _str(m["genre"]),
+      songCount: _int(m["songCount"]),
+      duration: _int(m["duration"]),
+      playCount: _int(m["playCount"]),
+      sortName: _str(m["sortName"]),
     );
   }).toList();
 }
@@ -168,6 +187,46 @@ List<SongInfo> parseSearch3Songs(
       duration: _int(m["duration"]),
       coverUrl: _coverUrl(base, auth, _str(m["coverArt"]), 300),
       audio: AudioInfo.fromSubsonic(m),
+      track: _int(m["track"]),
+      disc: _int(m["discNumber"]),
+      year: _int(m["year"]),
+      genre: _str(m["genre"]),
+      path: _str(m["path"]),
+      size: _int(m["size"]),
+      playCount: _int(m["playCount"]),
+    );
+  }).toList();
+}
+
+/// /rest/getArtists artist index, flattened in index order.
+List<ArtistInfo> parseArtists(Map<String, dynamic> root, String base, {SubsonicAuth? auth}) {
+  final artists = _asMap(response(root)["artists"]) ?? <String, dynamic>{};
+  final out = <ArtistInfo>[];
+  for (final idx in _asList(artists["index"])) {
+    final group = _asMap(idx) ?? <String, dynamic>{};
+    for (final e in _asList(group["artist"])) {
+      final m = _asMap(e) ?? <String, dynamic>{};
+      out.add(ArtistInfo(
+        id: _str(m["id"]),
+        name: _str(m["name"]),
+        coverUrl: _coverUrl(base, auth, _str(m["coverArt"])),
+        albumCount: _int(m["albumCount"]),
+        sortName: _str(m["sortName"]),
+      ));
+    }
+  }
+  return out;
+}
+
+/// /rest/getGenres genre index.
+List<GenreInfo> parseGenres(Map<String, dynamic> root) {
+  final genres = _asMap(response(root)["genres"]) ?? <String, dynamic>{};
+  return _asList(genres["genre"]).map((e) {
+    final m = _asMap(e) ?? <String, dynamic>{};
+    return GenreInfo(
+      name: _str(m["value"]),
+      albumCount: _int(m["albumCount"]),
+      songCount: _int(m["songCount"]),
     );
   }).toList();
 }

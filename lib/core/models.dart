@@ -196,13 +196,65 @@ class AlbumInfo {
   /// OpenSubsonic artistId, used by getArtistInfo2.
   final String artistId;
   final String coverUrl;
+
+  /// Richer metadata returned by the servers when available.
+  final int year;
+  final String genre;
+  final int songCount;
+  final int duration;
+  final int playCount;
+  final String sortName;
   const AlbumInfo({
     required this.id,
     required this.name,
     this.artist = "",
     this.artistId = "",
     this.coverUrl = "",
+    this.year = 0,
+    this.genre = "",
+    this.songCount = 0,
+    this.duration = 0,
+    this.playCount = 0,
+    this.sortName = "",
   });
+
+  AlbumInfo copyWith({
+    String? id,
+    String? name,
+    String? artist,
+    String? artistId,
+    String? coverUrl,
+    int? year,
+    String? genre,
+    int? songCount,
+    int? duration,
+    int? playCount,
+    String? sortName,
+  }) {
+    return AlbumInfo(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      artist: artist ?? this.artist,
+      artistId: artistId ?? this.artistId,
+      coverUrl: coverUrl ?? this.coverUrl,
+      year: year ?? this.year,
+      genre: genre ?? this.genre,
+      songCount: songCount ?? this.songCount,
+      duration: duration ?? this.duration,
+      playCount: playCount ?? this.playCount,
+      sortName: sortName ?? this.sortName,
+    );
+  }
+
+  String get metaText {
+    final parts = <String>[
+      if (year > 0) "$year",
+      if (genre.isNotEmpty) genre,
+      if (songCount > 0) "$songCount 首",
+      if (duration > 0) _shortDuration(duration),
+    ];
+    return parts.join(" · ");
+  }
 }
 
 class SongInfo {
@@ -217,6 +269,15 @@ class SongInfo {
 
   /// Technical metadata when the server provides it.
   final AudioInfo? audio;
+
+  /// Position inside the album and richer library metadata.
+  final int track;
+  final int disc;
+  final int year;
+  final String genre;
+  final String path;
+  final int size;
+  final int playCount;
   const SongInfo({
     required this.id,
     required this.title,
@@ -225,8 +286,58 @@ class SongInfo {
     this.duration = 0,
     this.coverUrl = "",
     this.audio,
+    this.track = 0,
+    this.disc = 0,
+    this.year = 0,
+    this.genre = "",
+    this.path = "",
+    this.size = 0,
+    this.playCount = 0,
+  });
+
+  String get trackText => track > 0 ? (disc > 1 ? "$disc-$track" : "$track") : "";
+
+  String get metaText {
+    final parts = <String>[
+      if (trackText.isNotEmpty) trackText,
+      if (year > 0) "$year",
+      if (genre.isNotEmpty) genre,
+      if (duration > 0) _shortDuration(duration),
+    ];
+    return parts.join(" · ");
+  }
+}
+
+/// One entry of an artist index (OpenSubsonic getArtists / LMS artists).
+class ArtistInfo {
+  final String id;
+  final String name;
+  final String coverUrl;
+  final int albumCount;
+  final String sortName;
+  const ArtistInfo({
+    required this.id,
+    required this.name,
+    this.coverUrl = "",
+    this.albumCount = 0,
+    this.sortName = "",
   });
 }
+
+/// One entry of the genre index (OpenSubsonic getGenres / LMS genres).
+class GenreInfo {
+  final String name;
+  final int albumCount;
+  final int songCount;
+  const GenreInfo({
+    required this.name,
+    this.albumCount = 0,
+    this.songCount = 0,
+  });
+}
+
+/// How the library page groups and drills down into the catalogue.
+enum LibraryGrouping { all, artist, genre, year }
 
 class LyricLine {
   final int timeMs;
@@ -255,4 +366,11 @@ int compareVersions(String a, String b) {
     if (x != y) return x < y ? -1 : 1;
   }
   return 0;
+}
+
+String _shortDuration(int seconds) {
+  if (seconds <= 0) return "";
+  final m = seconds ~/ 60;
+  final sec = seconds % 60;
+  return "$m:${sec.toString().padLeft(2, "0")}";
 }

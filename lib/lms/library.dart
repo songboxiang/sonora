@@ -32,12 +32,36 @@ List<AlbumInfo> parseLmsAlbums(Map<String, dynamic> root, {String base = ""}) {
       name: _str(m["album"]).isEmpty
           ? _str(m["favorites_title"])
           : _str(m["album"]),
-      artist: _str(m["artist"] ?? m["albumartist"]),
+      artist: _str(m["artist"] ?? m["albumartist"]).isEmpty
+          ? _artistFromFavorites(_str(m["favorites_url"]))
+          : _str(m["artist"] ?? m["albumartist"]),
       coverUrl: coverId.isEmpty || base.isEmpty
           ? ""
           : "$base/music/$coverId/cover",
+      year: _yearFromAlbumName(_str(m["album"])),
+      genre: _str(m["genre"]),
     );
   }).toList();
+}
+
+/// LMS favorites_url stores the contributor as a URL-encoded query value.
+String _artistFromFavorites(String url) {
+  if (url.isEmpty) return "";
+  final m = RegExp(r"contributor\.name=([^&]+)").firstMatch(url);
+  if (m == null) return "";
+  final raw = m.group(1) ?? "";
+  try {
+    return Uri.decodeComponent(raw);
+  } catch (_) {
+    return raw;
+  }
+}
+
+/// LMS album titles often begin with [YYYY]; use that as the grouping year.
+int _yearFromAlbumName(String name) {
+  final m = RegExp(r"^\[(\d{4})\]").firstMatch(name.trimLeft());
+  if (m == null) return 0;
+  return int.tryParse(m.group(1) ?? "") ?? 0;
 }
 
 /// `tracks 0 N` → titles_loop。LMS 的 duration 是浮点秒。
@@ -55,9 +79,81 @@ List<SongInfo> parseLmsTracks(Map<String, dynamic> root, {String base = ""}) {
       coverUrl: coverId.isEmpty || base.isEmpty
           ? ""
           : "$base/music/$coverId/cover",
+      genre: _str(m["genre"]),
+      year: _yearFromAlbumName(_str(m["album"])),
     );
   }).toList();
 }
+
+/// `artists 0 N` → artists_loop。
+List<ArtistInfo> parseLmsArtists(Map<String, dynamic> root) {
+  final loop = _asList(lmsResult(root)["artists_loop"]);
+  return loop.map((e) {
+    final m = _asMap(e) ?? <String, dynamic>{};
+    return ArtistInfo(
+      id: _str(m["id"]),
+      name: _str(m["artist"]),
+      albumCount: 0,
+    );
+  }).toList();
+}
+
+/// `genres 0 N` → genres_loop。
+List<GenreInfo> parseLmsGenres(Map<String, dynamic> root) {
+  final loop = _asList(lmsResult(root)["genres_loop"]);
+  return loop.map((e) {
+    final m = _asMap(e) ?? <String, dynamic>{};
+    return GenreInfo(name: _str(m["genre"]));
+  }).toList();
+}
+
+/// LMS ignores server-side artist/genre filters on the current build, so
+/// grouping the already fetched catalogue locally is the stable path.
+List<ArtistInfo> groupAlbumsByArtist(List<AlbumInfo> albums) {
+  final groups = <String, int>{};
+  for (final a in albums) {
+    final key = a.artist.trim();
+    if (key.isEmpty) continue;
+    groups[key] = (groups[key] ?? 0) + 1;
+  }
+  final out = groups.entries
+      .map((e) => ArtistInfo(id: e.key, name: e.key, albumCount: e.value))
+      .toList();
+  out.sort((a, b) => a.name.compareTo(b.name));
+  return out;
+}
+
+List<GenreInfo> groupAlbumsByGenre(List<AlbumInfo> albums) {
+  final groups = <String, int>{};
+  for (final a in albums) {
+    final key = a.genre.trim();
+    if (key.isEmpty) continue;
+    groups[key] = (groups[key] ?? 0) + 1;
+  }
+  final out = groups.entries
+      .map((e) => GenreInfo(name: e.key, albumCount: e.value))
+      .toList();
+  out.sort((a, b) => a.name.compareTo(b.name));
+  return out;
+}
+
+Map<int, List<AlbumInfo>> groupAlbumsByYear(List<AlbumInfo> albums) {
+  final out = <int, List<AlbumInfo>>{};
+  for (final a in albums) {
+    if (a.year <= 0) continue;
+    out.putIfAbsent(a.year, () => <AlbumInfo>[]).add(a);
+  }
+  return out;
+}
+
+List<AlbumInfo> albumsForArtist(List<AlbumInfo> albums, String artist) =>
+    albums.where((a) => a.artist == artist).toList();
+
+List<AlbumInfo> albumsForGenre(List<AlbumInfo> albums, String genre) =>
+    albums.where((a) => a.genre == genre).toList();
+
+List<AlbumInfo> albumsForYear(List<AlbumInfo> albums, int year) =>
+    albums.where((a) => a.year == year).toList();
 
 Future<List<AlbumInfo>> fetchLmsAlbums(
   LmsTarget target, {
@@ -88,6 +184,54 @@ Future<List<SongInfo>> fetchLmsTracks(
   final all = parseLmsTracks(root, base: target.baseUrl);
   if (album == null || album.isEmpty) return all;
   return all.where((s) => s.album == album).toList();
+}
+
+/// LMS albums_loop has no genre, but titles_loop does. Enrich the album
+/// list from a single full tracks fetch so the genre hierarchy is usable.
+Future<List<AlbumInfo>> enrichLmsAlbumsWithGenres(
+  LmsTarget target,
+  List<AlbumInfo> albums, {
+  int count = 3000,
+  void Function(String)? onError,
+}) async {
+  if (albums.isEmpty) return albums;
+  final tracks = await fetchLmsTracks(target, count: count, onError: onError);
+  if (tracks.isEmpty) return albums;
+  final byAlbum = <String, String>{};
+  for (final t in tracks) {
+    if (t.album.isEmpty || t.genre.isEmpty) continue;
+    byAlbum.putIfAbsent(t.album, () => t.genre);
+  }
+  return albums.map((a) {
+    final g = byAlbum[a.name];
+    return g == null || g.isEmpty ? a : a.copyWith(genre: g);
+  }).toList();
+}
+
+Future<List<ArtistInfo>> fetchLmsArtists(
+  LmsTarget target, {
+  int count = 500,
+  void Function(String)? onError,
+}) async {
+  final root = await lmsRpc(target, [
+    "",
+    ["artists", 0, count],
+  ], onError: onError);
+  if (root == null) return const <ArtistInfo>[];
+  return parseLmsArtists(root);
+}
+
+Future<List<GenreInfo>> fetchLmsGenres(
+  LmsTarget target, {
+  int count = 100,
+  void Function(String)? onError,
+}) async {
+  final root = await lmsRpc(target, [
+    "",
+    ["genres", 0, count],
+  ], onError: onError);
+  if (root == null) return const <GenreInfo>[];
+  return parseLmsGenres(root);
 }
 
 /// 让当前 LMS 播放器播放指定曲目 id。

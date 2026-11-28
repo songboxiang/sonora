@@ -93,6 +93,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   List<String> _logs = <String>[];
   List<AlbumInfo> _albums = <AlbumInfo>[];
   List<SongInfo> _songs = <SongInfo>[];
+
+  /// Server-side hierarchy indexes and the active drill-down selection.
+  LibraryGrouping _libraryGrouping = LibraryGrouping.all;
+  String? _groupArtist;
+  String? _groupGenre;
+  int? _groupYear;
+  List<ArtistInfo> _artistIndex = <ArtistInfo>[];
+  List<GenreInfo> _genreIndex = <GenreInfo>[];
   NavidromeAudio? _audio;
   bool _audioSubscribed = false;
   bool _autoAdvancing = false;
@@ -908,11 +916,154 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     ];
   }
 
+  String _groupingLabel(LibraryGrouping g) {
+    switch (g) {
+      case LibraryGrouping.all:
+        return "全部";
+      case LibraryGrouping.artist:
+        return "艺术家";
+      case LibraryGrouping.genre:
+        return "流派";
+      case LibraryGrouping.year:
+        return "年份";
+    }
+  }
+
+  bool get _hasGroupValue =>
+      _groupArtist != null || _groupGenre != null || _groupYear != null;
+
+  Widget _libraryGroupingBar() {
+    return Wrap(
+      spacing: 8,
+      children: LibraryGrouping.values.map((g) {
+        return ChoiceChip(
+          label: Text(_groupingLabel(g)),
+          selected: _libraryGrouping == g,
+          onSelected: (_) {
+            setState(() {
+              _libraryGrouping = g;
+              _groupArtist = null;
+              _groupGenre = null;
+              _groupYear = null;
+            });
+          },
+        );
+      }).toList(),
+    );
+  }
+
+  String get _groupValueText {
+    if (_groupArtist != null) return _groupArtist!;
+    if (_groupGenre != null) return _groupGenre!;
+    if (_groupYear != null) return "$_groupYear";
+    return "";
+  }
+
+  Widget _libraryBreadcrumb() {
+    return Row(
+      children: <Widget>[
+        Text(
+          "曲库 › ${_groupingLabel(_libraryGrouping)} › $_groupValueText",
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const Spacer(),
+        TextButton(
+          onPressed: () {
+            setState(() {
+              _groupArtist = null;
+              _groupGenre = null;
+              _groupYear = null;
+            });
+          },
+          child: const Text("返回索引"),
+        ),
+      ],
+    );
+  }
+
+  /// Index entries come from the server for OpenSubsonic, and from the
+  /// already-loaded catalogue for LMS (its server-side filters are unreliable).
+  List<Widget> _libraryIndexWidgets() {
+    final source = _activeLibrary == "lms" ? _lmsAlbums : _albums;
+    if (_libraryGrouping == LibraryGrouping.artist) {
+      final artists = _activeLibrary == "lms"
+          ? groupAlbumsByArtist(source)
+          : (_artistIndex.isNotEmpty
+              ? _artistIndex
+              : groupAlbumsByArtist(source));
+      return artists.map((a) {
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundImage:
+                a.coverUrl.isEmpty ? null : NetworkImage(a.coverUrl),
+            child: a.coverUrl.isEmpty ? const Icon(Icons.person) : null,
+          ),
+          title: Text(a.name.isEmpty ? "未知艺人" : a.name),
+          subtitle: a.albumCount > 0 ? Text("${a.albumCount} 张专辑") : null,
+          onTap: () => setState(() => _groupArtist = a.name),
+        );
+      }).toList();
+    }
+    if (_libraryGrouping == LibraryGrouping.genre) {
+      final genres = _activeLibrary == "lms"
+          ? groupAlbumsByGenre(source)
+          : (_genreIndex.isNotEmpty
+              ? _genreIndex
+              : groupAlbumsByGenre(source));
+      return genres.map((g) {
+        return ListTile(
+          leading: const CircleAvatar(child: Icon(Icons.category)),
+          title: Text(g.name.isEmpty ? "未知流派" : g.name),
+          subtitle: Text(
+            [
+              if (g.albumCount > 0) "${g.albumCount} 张专辑",
+              if (g.songCount > 0) "${g.songCount} 首",
+            ].join(" · "),
+          ),
+          onTap: () => setState(() => _groupGenre = g.name),
+        );
+      }).toList();
+    }
+    final years = groupAlbumsByYear(source).keys.toList()..sort();
+    return years.map((y) {
+      return ListTile(
+        leading: const CircleAvatar(child: Icon(Icons.calendar_today)),
+        title: Text("$y"),
+        subtitle: Text("${groupAlbumsByYear(source)[y]?.length ?? 0} 张专辑"),
+        onTap: () => setState(() => _groupYear = y),
+      );
+    }).toList();
+  }
+
+  List<AlbumInfo> _filteredAlbums(List<AlbumInfo> source) {
+    switch (_libraryGrouping) {
+      case LibraryGrouping.all:
+        return source;
+      case LibraryGrouping.artist:
+        return source.where((a) => a.artist == _groupArtist).toList();
+      case LibraryGrouping.genre:
+        return source.where((a) => a.genre == _groupGenre).toList();
+      case LibraryGrouping.year:
+        return source.where((a) => a.year == _groupYear).toList();
+    }
+  }
+
   List<Widget> _lmsLibraryWidgets() {
+    final showIndex = _libraryGrouping != LibraryGrouping.all && !_hasGroupValue;
+    if (showIndex) {
+      return <Widget>[
+        _libraryGroupingBar(),
+        const SizedBox(height: 8),
+        Text("${_groupingLabel(_libraryGrouping)}索引 · $_currentServerName"),
+        const Divider(),
+        ..._libraryIndexWidgets(),
+      ];
+    }
+    final albums = _filteredAlbums(_lmsAlbums);
     return <Widget>[
       Row(
         children: <Widget>[
-          Text("LMS 专辑 ${_lmsAlbums.length} 张"),
+          Text("LMS 专辑 ${albums.length} / ${_lmsAlbums.length} 张"),
           const Spacer(),
           ElevatedButton.icon(
             onPressed: _busy ? null : () => unawaited(_loadLmsAlbums()),
@@ -921,12 +1072,19 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           ),
         ],
       ),
+      _libraryGroupingBar(),
+      if (_hasGroupValue) _libraryBreadcrumb(),
       if (_selectedLmsAlbum != null) _infoCard("当前专辑", _selectedLmsAlbum!.name),
-      ..._lmsAlbums.map(
+      ...albums.map(
         (a) => ListTile(
           leading: const CircleAvatar(child: Icon(Icons.album)),
           title: Text(a.name),
-          subtitle: Text(a.artist.isEmpty ? "未知艺人" : a.artist),
+          subtitle: Text(
+            [
+              a.artist.isEmpty ? "未知艺人" : a.artist,
+              if (a.metaText.isNotEmpty) a.metaText,
+            ].join(" · "),
+          ),
           onTap: () => unawaited(_loadLmsSongs(a)),
         ),
       ),
@@ -936,7 +1094,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         (s) => ListTile(
           title: Text(s.title),
           subtitle: Text(
-            "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
+            [
+              s.artist.isEmpty ? "未知艺人" : s.artist,
+              if (s.metaText.isNotEmpty) s.metaText,
+            ].join(" · "),
           ),
           trailing: const Icon(Icons.play_arrow),
           onTap: () => unawaited(_playLmsSong(s)),
@@ -946,6 +1107,29 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   }
 
   List<Widget> _navLibraryWidgets() {
+    final showIndex = _libraryGrouping != LibraryGrouping.all && !_hasGroupValue;
+    if (showIndex) {
+      return <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(child: _field("搜索歌曲 / 专辑", _navSearch)),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: _busy ? null : () => unawaited(_searchNavidrome()),
+              icon: const Icon(Icons.search),
+              label: const Text("搜索"),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _libraryGroupingBar(),
+        const SizedBox(height: 8),
+        Text("${_groupingLabel(_libraryGrouping)}索引 · $_currentServerName"),
+        const Divider(),
+        ..._libraryIndexWidgets(),
+      ];
+    }
+    final albums = _filteredAlbums(_albums);
     return <Widget>[
       Row(
         children: <Widget>[
@@ -959,22 +1143,34 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         ],
       ),
       const SizedBox(height: 8),
-      ElevatedButton.icon(
-        onPressed: _busy ? null : () => unawaited(_loadAlbums()),
-        icon: const Icon(Icons.library_music_outlined),
-        label: const Text("加载专辑"),
+      Row(
+        children: <Widget>[
+          ElevatedButton.icon(
+            onPressed: _busy ? null : () => unawaited(_loadAlbums()),
+            icon: const Icon(Icons.library_music_outlined),
+            label: const Text("加载专辑"),
+          ),
+          const SizedBox(width: 8),
+          _libraryGroupingBar(),
+        ],
       ),
+      if (_hasGroupValue) _libraryBreadcrumb(),
       const Divider(),
-      Text("专辑 ${_albums.length} 张 · $_currentServerName（入口以专辑为准）"),
+      Text("专辑 ${albums.length} / ${_albums.length} 张 · $_currentServerName"),
       if (_albumNote.isNotEmpty) _infoCard("专辑简介", _albumNote),
       if (_artistBio.isNotEmpty) _infoCard("艺人简介", _artistBio),
-      ..._albums.map(
+      ...albums.map(
         (a) => ListTile(
           leading: a.coverUrl.isEmpty
               ? null
               : CircleAvatar(backgroundImage: NetworkImage(a.coverUrl)),
           title: Text(a.name),
-          subtitle: Text(a.artist.isEmpty ? "未知艺人" : a.artist),
+          subtitle: Text(
+            [
+              a.artist.isEmpty ? "未知艺人" : a.artist,
+              if (a.metaText.isNotEmpty) a.metaText,
+            ].join(" · "),
+          ),
           onTap: () => unawaited(_loadSongs(a)),
         ),
       ),
@@ -987,7 +1183,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               : CircleAvatar(backgroundImage: NetworkImage(s.coverUrl)),
           title: Text(s.title),
           subtitle: Text(
-            "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
+            [
+              s.artist.isEmpty ? "未知艺人" : s.artist,
+              if (s.metaText.isNotEmpty) s.metaText,
+            ].join(" · "),
           ),
           trailing: const Icon(Icons.play_arrow),
           onTap: () => unawaited(_playNavidromeSong(s)),
@@ -1278,7 +1477,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
     if (mounted) setState(() => _busy = true);
     try {
-      final albums = await fetchLmsAlbums(target, onError: _log);
+      var albums = await fetchLmsAlbums(target, onError: _log);
+      albums = await enrichLmsAlbumsWithGenres(target, albums, onError: _log);
       if (!mounted) return;
       setState(() {
         _lmsAlbums = albums;
@@ -1713,13 +1913,23 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         "${info.version.isEmpty ? "未知版本" : info.version} "
         "${info.reachable ? "ok" : "失败"}",
       );
-      final albums = await fetchNavidromeAlbums(
-        target,
-        onError: (m) => _log("曲库 $m"),
-      );
+      final results = await Future.wait(<Future<dynamic>>[
+        fetchNavidromeAlbums(target, onError: (m) => _log("曲库 $m")),
+        fetchNavidromeArtists(target, onError: (m) => _log("艺术家索引 $m")),
+        fetchNavidromeGenres(target, onError: (m) => _log("流派索引 $m")),
+      ]);
+      final albums = results[0] as List<AlbumInfo>;
+      final artists = results[1] as List<ArtistInfo>;
+      final genres = results[2] as List<GenreInfo>;
       if (!mounted) return;
       setState(() {
         _albums = albums;
+        _artistIndex = artists;
+        _genreIndex = genres;
+        _libraryGrouping = LibraryGrouping.all;
+        _groupArtist = null;
+        _groupGenre = null;
+        _groupYear = null;
         _songs = const <SongInfo>[];
         _navConnected = info.reachable;
         _navStatusText = info.reachable

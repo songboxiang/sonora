@@ -367,6 +367,91 @@ Future<List<SongInfo>> fetchNavidromeAlbum(
   }
 }
 
+/// Server-side artist index (OpenSubsonic getArtists), flattened by index.
+Future<List<ArtistInfo>> fetchNavidromeArtists(
+  NavidromeTarget target, {
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(queryParameters: target.query()).query;
+    return parseArtists(
+      parseJson(await getText("${target.baseUrl}/getArtists?$q")),
+      "http://${target.host}",
+      auth: target.auth,
+    );
+  } catch (e) {
+    onError?.call("艺术家索引 ${e.toString().split('\n').first}");
+    return const <ArtistInfo>[];
+  }
+}
+
+/// Server-side genre index (OpenSubsonic getGenres).
+Future<List<GenreInfo>> fetchNavidromeGenres(
+  NavidromeTarget target, {
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(queryParameters: target.query()).query;
+    return parseGenres(
+      parseJson(await getText("${target.baseUrl}/getGenres?$q")),
+    );
+  } catch (e) {
+    onError?.call("流派索引 ${e.toString().split('\n').first}");
+    return const <GenreInfo>[];
+  }
+}
+
+/// Albums filtered by genre on the server (Navidrome supports byGenre).
+Future<List<AlbumInfo>> fetchNavidromeAlbumsByGenre(
+  NavidromeTarget target,
+  String genre, {
+  int size = 500,
+  void Function(String)? onError,
+}) async {
+  if (genre.isEmpty) return const <AlbumInfo>[];
+  try {
+    final q = Uri(queryParameters: target.query({
+      "type": "byGenre",
+      "genre": genre,
+      "size": size.toString(),
+    })).query;
+    return parseAlbumList(
+      parseJson(await getText("${target.baseUrl}/getAlbumList2?$q")),
+      "http://${target.host}",
+      auth: target.auth,
+    );
+  } catch (e) {
+    onError?.call("流派专辑 ${e.toString().split('\n').first}");
+    return const <AlbumInfo>[];
+  }
+}
+
+/// Albums filtered by release year on the server (fromYear/toYear).
+Future<List<AlbumInfo>> fetchNavidromeAlbumsByYear(
+  NavidromeTarget target,
+  int year, {
+  int size = 500,
+  void Function(String)? onError,
+}) async {
+  if (year <= 0) return const <AlbumInfo>[];
+  try {
+    final q = Uri(queryParameters: target.query({
+      "type": "byYear",
+      "fromYear": "$year",
+      "toYear": "$year",
+      "size": size.toString(),
+    })).query;
+    return parseAlbumList(
+      parseJson(await getText("${target.baseUrl}/getAlbumList2?$q")),
+      "http://${target.host}",
+      auth: target.auth,
+    );
+  } catch (e) {
+    onError?.call("年份专辑 ${e.toString().split('\n').first}");
+    return const <AlbumInfo>[];
+  }
+}
+
 /// Server-side search across albums and songs (OpenSubsonic search3).
 Future<NavidromeSearchResult> searchNavidrome(
   NavidromeTarget target,

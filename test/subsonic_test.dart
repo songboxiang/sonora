@@ -199,4 +199,77 @@ void main() {
     expect(songs.single.audio?.channels, 2);
     expect(songs.single.audio?.lossless, isTrue);
   });
+
+  test("parseAlbumList carries year/genre/counts metadata", () {
+    final list = parseAlbumList(
+      j(
+        "{\"subsonic-response\":{\"albumList2\":{\"album\":["
+        "{\"id\":\"a1\",\"name\":\"情歌精选\",\"artist\":\"张信哲\","
+        "\"year\":2005,\"genre\":\"POP\",\"songCount\":32,"
+        "\"duration\":8981,\"playCount\":31,\"sortName\":\"qgxj\"}]}}}",
+      ),
+      "http://nav:4533",
+    );
+    final a = list.single;
+    expect(a.year, 2005);
+    expect(a.genre, "POP");
+    expect(a.songCount, 32);
+    expect(a.duration, 8981);
+    expect(a.playCount, 31);
+    expect(a.sortName, "qgxj");
+    expect(a.metaText, contains("2005"));
+    expect(a.metaText, contains("32 首"));
+  });
+
+  test("parseAlbum carries track/disc/path metadata", () {
+    final songs = parseAlbum(
+      j(
+        "{\"subsonic-response\":{\"album\":{\"song\":[{\"id\":\"s1\","
+        "\"title\":\"爱如潮水\",\"track\":1,\"discNumber\":2,"
+        "\"year\":2005,\"genre\":\"POP\",\"duration\":273,"
+        "\"path\":\"张信哲/情歌精选/01.flac\",\"size\":29604952,"
+        "\"playCount\":3}]}}}",
+      ),
+    );
+    final s = songs.single;
+    expect(s.track, 1);
+    expect(s.disc, 2);
+    expect(s.trackText, "2-1");
+    expect(s.year, 2005);
+    expect(s.genre, "POP");
+    expect(s.path, contains("01.flac"));
+    expect(s.size, 29604952);
+    expect(s.playCount, 3);
+    expect(s.metaText, contains("2-1"));
+  });
+
+  test("parseArtists flattens index groups", () {
+    final artists = parseArtists(
+      j(
+        "{\"subsonic-response\":{\"artists\":{\"index\":["
+        "{\"name\":\"#\",\"artist\":[{\"id\":\"ar1\",\"name\":\"久石让\","
+        "\"coverArt\":\"c1\",\"albumCount\":3,\"sortName\":\"Joe\"}]},"
+        "{\"name\":\"Z\",\"artist\":[{\"id\":\"ar2\",\"name\":\"张学友\"}]}]}}}",
+      ),
+      "http://nav:4533",
+    );
+    expect(artists.length, 2);
+    expect(artists.first.name, "久石让");
+    expect(artists.first.albumCount, 3);
+    expect(artists.first.sortName, "Joe");
+    expect(artists.first.coverUrl, contains("getCoverArt"));
+    expect(artists.last.coverUrl, "");
+  });
+
+  test("parseGenres reads counts", () {
+    final genres = parseGenres(
+      j(
+        "{\"subsonic-response\":{\"genres\":{\"genre\":["
+        "{\"value\":\"Pop\",\"songCount\":434,\"albumCount\":32}]}}}",
+      ),
+    );
+    expect(genres.single.name, "Pop");
+    expect(genres.single.songCount, 434);
+    expect(genres.single.albumCount, 32);
+  });
 }
