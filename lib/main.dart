@@ -7,7 +7,9 @@ import "package:just_audio/just_audio.dart";
 import "core/models.dart";
 import "core/services.dart";
 import "core/installer.dart";
+import "core/settings.dart";
 import "core/updates.dart";
+import "lms/library.dart";
 import "lms/protocol.dart";
 import "navidrome/audio.dart";
 import "navidrome/subsonic.dart";
@@ -51,7 +53,26 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   final _navCreds = TextEditingController(
     text: "/Users/song/navidrome_creds.json",
   );
+  final _navUser = TextEditingController();
+  final _navPass = TextEditingController();
   final _navSearch = TextEditingController();
+  final _deviceNameCtrl = TextEditingController();
+  final _playerNameCtrl = TextEditingController(text: "Sonora-UI");
+  final _latencyCtrl = TextEditingController(text: "10");
+  final _ratesCtrl = TextEditingController(text: "44100-384000");
+  final _streamBufCtrl = TextEditingController(text: "2048");
+  final _outBufCtrl = TextEditingController(text: "3445");
+  final _modelCtrl = TextEditingController();
+  final _extraCtrl = TextEditingController();
+  final _settingsStore = SettingsStore();
+  late AppSettings _settings;
+  CoreParams _coreParams = const CoreParams();
+  bool _editMode = false;
+  List<OutputDevice> _deviceOptions = <OutputDevice>[];
+  String _activeLibrary = "lms";
+  List<AlbumInfo> _lmsAlbums = <AlbumInfo>[];
+  List<SongInfo> _lmsSongs = <SongInfo>[];
+  AlbumInfo? _selectedLmsAlbum;
   List<LyricLine> _lyrics = <LyricLine>[];
   String _albumNote = "";
   String _artistBio = "";
@@ -96,6 +117,28 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _settings = _settingsStore.load();
+    _host.text = _settings.lmsHost;
+    _port.text = _settings.lmsPort;
+    _slim.text = _settings.slimPort;
+    _user.text = _settings.lmsUser;
+    _pass.text = _settings.lmsPassword;
+    _lmsCreds.text = _settings.lmsCredsPath;
+    _navHost.text = _settings.navHost;
+    _navUser.text = _settings.navUser;
+    _navPass.text = _settings.navPassword;
+    _navCreds.text = _settings.navCredsPath;
+    _appZipUrl.text = _settings.appZipUrl;
+    _appSumsUrl.text = _settings.appSumsUrl;
+    _activeLibrary = _settings.activeLibrary == "navidrome"
+        ? "navidrome"
+        : "lms";
+    _source = _activeLibrary;
+    _coreParams = _settings.coreParams;
+    _syncParamControllers();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_scanOutputDevices());
+    });
     WidgetsBinding.instance.addObserver(this);
     // Headless verification hook: SONORA_AUTO_CONNECT=1 makes the real UI
     // exercise the same connect path a user clicks, without GUI automation.
@@ -157,7 +200,17 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _lmsCreds,
       _navHost,
       _navCreds,
+      _navUser,
+      _navPass,
       _navSearch,
+      _deviceNameCtrl,
+      _playerNameCtrl,
+      _latencyCtrl,
+      _ratesCtrl,
+      _streamBufCtrl,
+      _outBufCtrl,
+      _modelCtrl,
+      _extraCtrl,
       _appZipUrl,
       _appSumsUrl,
     ]) {
@@ -484,6 +537,432 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _log("已从本地配置导入连接参数（密码未显示）");
   }
 
+  CoreParams _collectParamsFromFields() {
+    return _coreParams.copyWith(
+      deviceName: _deviceNameCtrl.text.trim(),
+      playerName: _playerNameCtrl.text.trim().isEmpty
+          ? "Sonora-UI"
+          : _playerNameCtrl.text.trim(),
+      latencyMs: int.tryParse(_latencyCtrl.text.trim()) ?? 10,
+      rates: _ratesCtrl.text.trim(),
+      streamBufferKb: int.tryParse(_streamBufCtrl.text.trim()) ?? 2048,
+      outputBufferKb: int.tryParse(_outBufCtrl.text.trim()) ?? 3445,
+      modelName: _modelCtrl.text.trim(),
+      extraArgs: _extraCtrl.text.trim(),
+    );
+  }
+
+  void _syncParamControllers() {
+    _deviceNameCtrl.text = _coreParams.deviceName;
+    _playerNameCtrl.text = _coreParams.playerName;
+    _latencyCtrl.text = _coreParams.latencyMs.toString();
+    _ratesCtrl.text = _coreParams.rates;
+    _streamBufCtrl.text = _coreParams.streamBufferKb.toString();
+    _outBufCtrl.text = _coreParams.outputBufferKb.toString();
+    _modelCtrl.text = _coreParams.modelName;
+    _extraCtrl.text = _coreParams.extraArgs;
+  }
+
+  List<Widget> _configEditorWidgets() {
+    void markCustom() {
+      if (_coreParams.profile != "custom") {
+        _coreParams = _coreParams.copyWith(profile: "custom");
+      }
+    }
+
+    return <Widget>[
+      const Text("Navidrome", style: TextStyle(fontWeight: FontWeight.bold)),
+      _field("地址（IP:端口）", _navHost, onChanged: (_) => markCustom()),
+      _field("账号", _navUser, onChanged: (_) => markCustom()),
+      _field("密码", _navPass, obscure: true, onChanged: (_) => markCustom()),
+      _field("凭证路径（账号密码为空时读取）", _navCreds),
+      const Divider(),
+      const Text("LMS", style: TextStyle(fontWeight: FontWeight.bold)),
+      _field("主机", _host, onChanged: (_) => markCustom()),
+      _field("JSON-RPC 端口", _port, onChanged: (_) => markCustom()),
+      _field("slimproto 端口", _slim, onChanged: (_) => markCustom()),
+      _field("用户名", _user, onChanged: (_) => markCustom()),
+      _field("密码", _pass, obscure: true, onChanged: (_) => markCustom()),
+      _field("旧配置路径（只读导入）", _lmsCreds),
+      const Divider(),
+      const Text("输出设备", style: TextStyle(fontWeight: FontWeight.bold)),
+      Wrap(
+        spacing: 8,
+        children: <Widget>[
+          ElevatedButton.icon(
+            onPressed: () => unawaited(_scanOutputDevices()),
+            icon: const Icon(Icons.radar),
+            label: const Text("扫描设备"),
+          ),
+          OutlinedButton.icon(
+            onPressed: _importLmsCreds,
+            icon: const Icon(Icons.file_open_outlined),
+            label: const Text("导入 LMS 凭证"),
+          ),
+        ],
+      ),
+      if (_deviceOptions.isEmpty)
+        const Text(
+          "尚未扫描。上一次使用的设备会自动作为默认值；点「扫描设备」列出可用输出。",
+          style: TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+      DropdownButtonFormField<String>(
+        initialValue: _deviceOptions.any((d) => d.name == _coreParams.device)
+            ? _coreParams.device
+            : null,
+        hint: const Text("选择输出设备（-o）"),
+        isExpanded: true,
+        items: _deviceOptions
+            .map(
+              (d) =>
+                  DropdownMenuItem<String>(value: d.name, child: Text(d.name)),
+            )
+            .toList(),
+        onChanged: _deviceOptions.isEmpty
+            ? null
+            : (v) {
+                if (v == null) return;
+                setState(
+                  () => _coreParams = _coreParams.copyWith(
+                    device: v,
+                    deviceName: v,
+                    profile: "custom",
+                  ),
+                );
+              },
+      ),
+      _helpText("device"),
+      _field("设备显示名称（重命名）", _deviceNameCtrl, onChanged: (_) => markCustom()),
+      _helpText("deviceName"),
+      const Divider(),
+      const Text("参数配置", style: TextStyle(fontWeight: FontWeight.bold)),
+      Wrap(
+        spacing: 8,
+        children: coreProfiles.entries
+            .map(
+              (e) => FilterChip(
+                label: Text(e.value),
+                selected: _coreParams.profile == e.key,
+                onSelected: (_) => _applyCoreProfile(e.key),
+              ),
+            )
+            .toList(),
+      ),
+      const SizedBox(height: 8),
+      _field("播放器名称（-n）", _playerNameCtrl, onChanged: (_) => markCustom()),
+      _helpText("playerName"),
+      _field("目标延迟毫秒（-a 第一段）", _latencyCtrl, onChanged: (_) => markCustom()),
+      _helpText("latencyMs"),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text("允许 macOS 重采样（-a 第二段）"),
+        value: _coreParams.allowResample,
+        onChanged: (v) => setState(
+          () => _coreParams = _coreParams.copyWith(
+            allowResample: v,
+            profile: "custom",
+          ),
+        ),
+      ),
+      _helpText("allowResample"),
+      _field("支持采样率（-r）", _ratesCtrl, onChanged: (_) => markCustom()),
+      _helpText("rates"),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text("DSD over PCM 直通（-D）"),
+        value: _coreParams.dop,
+        onChanged: (v) => setState(
+          () => _coreParams = _coreParams.copyWith(dop: v, profile: "custom"),
+        ),
+      ),
+      _helpText("dop"),
+      Row(
+        children: <Widget>[
+          Expanded(
+            child: _field(
+              "流缓冲 KB",
+              _streamBufCtrl,
+              onChanged: (_) => markCustom(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _field(
+              "输出缓冲 KB",
+              _outBufCtrl,
+              onChanged: (_) => markCustom(),
+            ),
+          ),
+        ],
+      ),
+      _helpText("buffers"),
+      _field("播放器型号（-M，可留空）", _modelCtrl, onChanged: (_) => markCustom()),
+      _helpText("modelName"),
+      _field("额外参数", _extraCtrl, onChanged: (_) => markCustom()),
+      _helpText("extraArgs"),
+      const SizedBox(height: 8),
+      ElevatedButton.icon(
+        onPressed: () async {
+          await _saveSettings();
+          if (!mounted) return;
+          setState(() => _editMode = false);
+        },
+        icon: const Icon(Icons.save),
+        label: const Text("保存配置"),
+      ),
+    ];
+  }
+
+  List<Widget> _lmsLibraryWidgets() {
+    return <Widget>[
+      Row(
+        children: <Widget>[
+          Text("LMS 专辑 ${_lmsAlbums.length} 张"),
+          const Spacer(),
+          ElevatedButton.icon(
+            onPressed: _busy ? null : () => unawaited(_loadLmsAlbums()),
+            icon: const Icon(Icons.refresh),
+            label: const Text("加载专辑"),
+          ),
+        ],
+      ),
+      if (_selectedLmsAlbum != null) _infoCard("当前专辑", _selectedLmsAlbum!.name),
+      ..._lmsAlbums.map(
+        (a) => ListTile(
+          leading: const CircleAvatar(child: Icon(Icons.album)),
+          title: Text(a.name),
+          subtitle: Text(a.artist.isEmpty ? "未知艺人" : a.artist),
+          onTap: () => unawaited(_loadLmsSongs(a)),
+        ),
+      ),
+      const Divider(),
+      Text("歌曲 ${_lmsSongs.length} 首"),
+      ..._lmsSongs.map(
+        (s) => ListTile(
+          title: Text(s.title),
+          subtitle: Text(
+            "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
+          ),
+          trailing: const Icon(Icons.play_arrow),
+          onTap: () => unawaited(_playLmsSong(s)),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _navLibraryWidgets() {
+    return <Widget>[
+      Row(
+        children: <Widget>[
+          Expanded(child: _field("搜索歌曲 / 专辑", _navSearch)),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: _busy ? null : () => unawaited(_searchNavidrome()),
+            icon: const Icon(Icons.search),
+            label: const Text("搜索"),
+          ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      ElevatedButton.icon(
+        onPressed: _busy ? null : () => unawaited(_loadAlbums()),
+        icon: const Icon(Icons.library_music_outlined),
+        label: const Text("加载专辑"),
+      ),
+      const Divider(),
+      Text("专辑 ${_albums.length} 张（入口以专辑为准）"),
+      if (_albumNote.isNotEmpty) _infoCard("专辑简介", _albumNote),
+      if (_artistBio.isNotEmpty) _infoCard("艺人简介", _artistBio),
+      ..._albums.map(
+        (a) => ListTile(
+          leading: a.coverUrl.isEmpty
+              ? null
+              : CircleAvatar(backgroundImage: NetworkImage(a.coverUrl)),
+          title: Text(a.name),
+          subtitle: Text(a.artist.isEmpty ? "未知艺人" : a.artist),
+          onTap: () => unawaited(_loadSongs(a)),
+        ),
+      ),
+      const Divider(),
+      Text("歌曲 ${_songs.length} 首"),
+      ..._songs.map(
+        (s) => ListTile(
+          leading: s.coverUrl.isEmpty
+              ? null
+              : CircleAvatar(backgroundImage: NetworkImage(s.coverUrl)),
+          title: Text(s.title),
+          subtitle: Text(
+            "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
+          ),
+          trailing: const Icon(Icons.play_arrow),
+          onTap: () => unawaited(_playNavidromeSong(s)),
+        ),
+      ),
+    ];
+  }
+
+  Widget _helpText(String key) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        coreParamHelp[key] ?? "",
+        style: const TextStyle(fontSize: 11, color: Colors.grey),
+      ),
+    );
+  }
+
+  Future<void> _saveSettings() async {
+    _coreParams = _collectParamsFromFields();
+    _settings
+      ..lmsHost = _host.text.trim()
+      ..lmsPort = _port.text.trim()
+      ..slimPort = _slim.text.trim()
+      ..lmsUser = _user.text.trim()
+      ..lmsPassword = _pass.text
+      ..lmsCredsPath = _lmsCreds.text.trim()
+      ..navHost = _navHost.text.trim()
+      ..navUser = _navUser.text.trim()
+      ..navPassword = _navPass.text
+      ..navCredsPath = _navCreds.text.trim()
+      ..activeLibrary = _activeLibrary
+      ..appZipUrl = _appZipUrl.text.trim()
+      ..appSumsUrl = _appSumsUrl.text.trim()
+      ..coreParams = _coreParams;
+    try {
+      await _settingsStore.save(_settings);
+      _log(
+        "配置已保存（上次输出设备：${_coreParams.device.isEmpty ? '默认' : _coreParams.device}）",
+      );
+    } catch (e) {
+      _log("配置保存失败 ${e.toString().split("\n").first}");
+    }
+  }
+
+  Future<void> _scanOutputDevices() async {
+    var core = CoreRunner.userCorePath();
+    if (!File(core).existsSync()) {
+      final bundled = CoreRunner.bundledCorePath();
+      if (bundled != null && File(bundled).existsSync()) core = bundled;
+    }
+    if (!File(core).existsSync()) {
+      _log("找不到核心二进制，无法扫描输出设备");
+      return;
+    }
+    try {
+      final r = await Process.run(core, [
+        "-l",
+      ]).timeout(const Duration(seconds: 8));
+      final devices = parseOutputDevices("${r.stdout}\n${r.stderr}");
+      if (!mounted) return;
+      setState(() {
+        _deviceOptions = devices;
+        if (devices.isNotEmpty &&
+            !devices.any(
+              (d) => d.id == _coreParams.device || d.name == _coreParams.device,
+            )) {
+          _coreParams = _coreParams.copyWith(
+            device: devices.first.name,
+            deviceName: devices.first.name,
+            profile: "custom",
+          );
+        }
+      });
+      _log("扫描到 ${devices.length} 个输出设备");
+    } catch (e) {
+      _log("设备扫描失败 ${e.toString().split("\n").first}");
+    }
+  }
+
+  void _applyCoreProfile(String profile) {
+    final p = paramsForProfile(profile, base: _collectParamsFromFields());
+    setState(() => _coreParams = p);
+    _syncParamControllers();
+    _log("已套用音质预设：${coreProfiles[profile] ?? profile}");
+  }
+
+  Future<void> _switchLibrary(String id) async {
+    if (id != "lms" && id != "navidrome") return;
+    if (id == _activeLibrary) {
+      _log("已经在 ${id == "lms" ? "LMS" : "Navidrome"} 曲库");
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    try {
+      if (id == "lms") {
+        await _audio?.stop();
+        if (!mounted) return;
+        setState(() {
+          _activeLibrary = "lms";
+          _source = "lms";
+        });
+        _log("切换到 LMS 曲库，自动开启引擎");
+        await _connect();
+        await _loadLmsAlbums();
+      } else {
+        await _stopCore();
+        if (!mounted) return;
+        setState(() {
+          _activeLibrary = "navidrome";
+          _source = "navidrome";
+        });
+        _log("切换到 Navidrome 曲库，引擎已自动关闭");
+        await _loadAlbums();
+      }
+      await _saveSettings();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _loadLmsAlbums() async {
+    final target = _target;
+    if (target == null) {
+      _log("请先连接 LMS 再加载曲库");
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    try {
+      final albums = await fetchLmsAlbums(target, onError: _log);
+      if (!mounted) return;
+      setState(() {
+        _lmsAlbums = albums;
+        _lmsSongs = const <SongInfo>[];
+        _selectedLmsAlbum = null;
+      });
+      _log("LMS 专辑 ${albums.length} 张");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _loadLmsSongs(AlbumInfo album) async {
+    final target = _target;
+    if (target == null) return;
+    final songs = await fetchLmsTracks(
+      target,
+      album: album.name,
+      onError: _log,
+    );
+    if (!mounted) return;
+    setState(() {
+      _selectedLmsAlbum = album;
+      _lmsSongs = songs;
+    });
+    _log("${album.name}：${songs.length} 首");
+  }
+
+  Future<void> _playLmsSong(SongInfo song) async {
+    final target = _target;
+    final playerId = _playerId;
+    if (target == null || playerId == null) {
+      _log("没有可用的 LMS 播放器，请先连接并等待核心注册");
+      return;
+    }
+    final ok = await playLmsTrack(target, playerId, song.id, onError: _log);
+    _log(ok ? "LMS 播放：${song.title}" : "LMS 播放失败：${song.title}");
+    unawaited(_refreshStatus());
+  }
+
   Future<void> _connect() async {
     setState(() => _busy = true);
     try {
@@ -534,12 +1013,13 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _log("核心已在运行，跳过重复启动");
       return;
     }
-    const playerName = "Sonora-UI";
+    final playerName = _coreParams.playerName;
     final runner = CoreRunner(
       lmsHost: target.host,
       lmsPort: target.port,
       slimPort: target.slimPort,
       playerName: playerName,
+      params: _coreParams,
       onLog: _log,
     );
     _runner = runner;
@@ -548,7 +1028,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       final p = await runner.start();
       if (!mounted) return;
       setState(() => _coreStatus = "已启动 pid=${p.pid}");
-      _log("核心已自动拉起 pid=${p.pid}");
+      _log(
+        "核心已自动拉起 pid=${p.pid}（设备 ${_coreParams.device.isEmpty ? '默认' : _coreParams.device}）",
+      );
+      await _saveSettings();
 
       final before = await lmsPlayerCount(
         target,
@@ -807,10 +1290,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   }
 
   NavidromeTarget? _navidromeTarget() {
-    final c = readCreds(_navCreds.text.trim());
-    final user = c["user"];
-    final pass = c["password"] ?? c["pass"];
-    if (user == null || pass == null) {
+    var user = _navUser.text.trim();
+    var pass = _navPass.text;
+    if (user.isEmpty || pass.isEmpty) {
+      final c = readCreds(_navCreds.text.trim());
+      user = c["user"] ?? c["lms_user"] ?? "";
+      pass = c["password"] ?? c["pass"] ?? "";
+    }
+    if (user.isEmpty || pass.isEmpty) {
       _log("Navidrome 凭证不完整：${_navCreds.text}");
       return null;
     }
@@ -934,12 +1421,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     String label,
     TextEditingController controller, {
     bool obscure = false,
+    void Function(String)? onChanged,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: TextField(
         controller: controller,
         obscureText: obscure,
+        onChanged: onChanged,
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
@@ -1019,42 +1508,75 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  _field("LMS 主机", _host),
-                  _field("JSON-RPC 端口", _port),
-                  _field("slimproto 端口", _slim),
-                  _field("用户名（可留空，用配置文件）", _user),
-                  _field("密码", _pass, obscure: true),
-                  _field("旧配置路径（只读导入）", _lmsCreds),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
+                  Row(
                     children: <Widget>[
-                      ElevatedButton.icon(
-                        onPressed: _busy ? null : _importLmsCreds,
-                        icon: const Icon(Icons.file_open_outlined),
-                        label: const Text("导入凭证"),
+                      const Text(
+                        "服务器连接",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
-                      ElevatedButton.icon(
-                        onPressed: _busy ? null : () => unawaited(_connect()),
-                        icon: const Icon(Icons.link),
-                        label: const Text("连接并自动拉起核心"),
-                      ),
+                      const Spacer(),
                       OutlinedButton.icon(
-                        onPressed: _busy ? null : () => unawaited(_stopCore()),
-                        icon: const Icon(Icons.stop_circle_outlined),
-                        label: const Text("停止核心"),
+                        onPressed: () => setState(() => _editMode = !_editMode),
+                        icon: Icon(_editMode ? Icons.check : Icons.edit),
+                        label: Text(_editMode ? "完成" : "修改配置"),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  if (_editMode) ..._configEditorWidgets(),
+                  if (!_editMode) ...<Widget>[
+                    _field("LMS 主机", _host),
+                    _field("JSON-RPC 端口", _port),
+                    _field("slimproto 端口", _slim),
+                    _field("用户名（可留空，用配置文件）", _user),
+                    _field("密码", _pass, obscure: true),
+                    _field("旧配置路径（只读导入）", _lmsCreds),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      children: <Widget>[
+                        ElevatedButton.icon(
+                          onPressed: _busy ? null : _importLmsCreds,
+                          icon: const Icon(Icons.file_open_outlined),
+                          label: const Text("导入凭证"),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: _busy ? null : () => unawaited(_connect()),
+                          icon: const Icon(Icons.link),
+                          label: const Text("连接并自动拉起核心"),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => unawaited(_stopCore()),
+                          icon: const Icon(Icons.stop_circle_outlined),
+                          label: const Text("停止核心"),
+                        ),
+                      ],
+                    ),
+                  ],
                   if (_busy) const LinearProgressIndicator(),
                   const Divider(),
                   _statusRow("LMS 版本", _lmsVersion),
                   _statusRow("播放器数量", _playerCount < 0 ? "-" : "$_playerCount"),
                   _statusRow("核心状态", _coreStatus),
+                  _statusRow(
+                    "当前曲库",
+                    _activeLibrary == "lms" ? "LMS" : "Navidrome",
+                  ),
+                  _statusRow(
+                    "输出设备",
+                    _coreParams.deviceName.isEmpty
+                        ? "默认"
+                        : _coreParams.deviceName,
+                  ),
                   const SizedBox(height: 12),
                   const Text(
                     "连接时会自动把内置 squeezelite 复制到用户目录并拉起子进程；"
-                    "不需要手动启动。",
+                    "切换曲库会自动启停引擎，输出设备默认沿用上一次选择。",
                   ),
                 ],
               ),
@@ -1204,60 +1726,55 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  _field("Navidrome 地址", _navHost),
-                  _field("凭证路径", _navCreds),
-                  Row(
-                    children: <Widget>[
-                      Expanded(child: _field("搜索歌曲 / 专辑", _navSearch)),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: _busy
-                            ? null
-                            : () => unawaited(_searchNavidrome()),
-                        icon: const Icon(Icons.search),
-                        label: const Text("搜索"),
-                      ),
-                    ],
+                  const Text(
+                    "曲库轨道",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: _busy ? null : () => unawaited(_loadAlbums()),
-                    icon: const Icon(Icons.library_music_outlined),
-                    label: const Text("加载专辑"),
-                  ),
-                  const Divider(),
-                  Text("专辑 ${_albums.length} 张（入口以专辑为准）"),
-                  if (_albumNote.isNotEmpty) _infoCard("专辑简介", _albumNote),
-                  if (_artistBio.isNotEmpty) _infoCard("艺人简介", _artistBio),
-                  ..._albums.map(
-                    (a) => ListTile(
-                      leading: a.coverUrl.isEmpty
-                          ? null
-                          : CircleAvatar(
-                              backgroundImage: NetworkImage(a.coverUrl),
-                            ),
-                      title: Text(a.name),
-                      subtitle: Text(a.artist.isEmpty ? "未知艺人" : a.artist),
-                      onTap: () => unawaited(_loadSongs(a)),
-                    ),
-                  ),
-                  const Divider(),
-                  Text("歌曲 ${_songs.length} 首"),
-                  ..._songs.map(
-                    (s) => ListTile(
-                      leading: s.coverUrl.isEmpty
-                          ? null
-                          : CircleAvatar(
-                              backgroundImage: NetworkImage(s.coverUrl),
-                            ),
-                      title: Text(s.title),
+                  Card(
+                    child: ListTile(
+                      selected: _activeLibrary == "lms",
+                      leading: const Icon(Icons.dns_outlined),
+                      title: const Text("LMS 曲库"),
                       subtitle: Text(
-                        "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
+                        _activeLibrary == "lms"
+                            ? "当前轨道 · 引擎${_runner != null ? "已启动" : "未启动"}"
+                            : "切换后自动开启引擎",
                       ),
-                      trailing: const Icon(Icons.play_arrow),
-                      onTap: () => unawaited(_playNavidromeSong(s)),
+                      trailing: _activeLibrary == "lms"
+                          ? const Icon(Icons.check_circle, color: Colors.indigo)
+                          : ElevatedButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () => unawaited(_switchLibrary("lms")),
+                              child: const Text("切换"),
+                            ),
                     ),
                   ),
+                  Card(
+                    child: ListTile(
+                      selected: _activeLibrary == "navidrome",
+                      leading: const Icon(Icons.audiotrack),
+                      title: const Text("Navidrome 曲库"),
+                      subtitle: Text(
+                        _activeLibrary == "navidrome"
+                            ? "当前轨道 · 客户端流"
+                            : "切换后自动关闭引擎",
+                      ),
+                      trailing: _activeLibrary == "navidrome"
+                          ? const Icon(Icons.check_circle, color: Colors.indigo)
+                          : ElevatedButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () =>
+                                        unawaited(_switchLibrary("navidrome")),
+                              child: const Text("切换"),
+                            ),
+                    ),
+                  ),
+                  const Divider(),
+                  if (_activeLibrary == "lms") ..._lmsLibraryWidgets(),
+                  if (_activeLibrary == "navidrome") ..._navLibraryWidgets(),
                 ],
               ),
             ),

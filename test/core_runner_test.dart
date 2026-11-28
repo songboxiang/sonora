@@ -1,6 +1,7 @@
 import "dart:io";
 
 import "package:flutter_test/flutter_test.dart";
+import "package:sonora/core/settings.dart";
 import "package:sonora/squeezelite/core_runner.dart";
 
 void main() {
@@ -20,20 +21,13 @@ void main() {
           playerName: "客厅",
           device: "builtin:0",
         ),
-        equals([
-          "-s", "lms.local:9001",
-          "-n", "客厅",
-          "-a", "builtin:0",
-        ]),
+        equals(["-s", "lms.local:9001", "-n", "客厅", "-o", "builtin:0"]),
       );
     });
 
     test("空设备字符串不会生成 -a", () {
-      final args = CoreRunner.buildArgs(
-        lmsHost: "lms.local",
-        device: "",
-      );
-      expect(args, isNot(contains("-a")));
+      final args = CoreRunner.buildArgs(lmsHost: "lms.local", device: "");
+      expect(args, isNot(contains("-o")));
     });
 
     test("显式 MAC 会生成 -m，避免 LMS 残留 MAC 冲突", () {
@@ -85,6 +79,40 @@ void main() {
         equals("${bin.path}/squeezelite"),
       );
       dir.deleteSync(recursive: true);
+    });
+  });
+
+  group("完整参数集", () {
+    test("音质预设生成 -o/-a/-r/-D/-b/-m", () {
+      final p = paramsForProfile("best").copyWith(device: "2");
+      final args = buildCoreArgs(
+        params: p,
+        lmsHost: "192.168.199.2",
+        mac: "02:aa:bb:cc:dd:ee",
+      );
+      expect(args, containsAll(["-o", "2"]));
+      expect(args, containsAll(["-a", "20:0"]));
+      expect(args, containsAll(["-r", "44100-384000"]));
+      expect(args, contains("-D"));
+      expect(args, containsAll(["-b", "4096:8192"]));
+      expect(args, containsAll(["-m", "02:aa:bb:cc:dd:ee"]));
+    });
+
+    test("允许重采样时 -a 第二段为 1，且不带 -D", () {
+      final p = paramsForProfile("bitperfect").copyWith(allowResample: true);
+      final args = buildCoreArgs(params: p, lmsHost: "lms");
+      expect(args, containsAll(["-a", "10:1"]));
+      expect(args, isNot(contains("-D")));
+    });
+
+    test("CoreRunner 传入 params 时覆盖简写参数", () {
+      final args = CoreRunner.buildArgs(
+        lmsHost: "lms",
+        params: paramsForProfile("dsd").copyWith(device: "1"),
+      );
+      expect(args, containsAll(["-o", "1"]));
+      expect(args, contains("-D"));
+      expect(args, containsAll(["-a", "20:0"]));
     });
   });
 }

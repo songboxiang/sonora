@@ -95,6 +95,14 @@ cd ~/Projects/sonora_v2 && dart run tool/probe_install.dart
 - 播放页显示当前封面与逐行歌词，当前行随进度高亮；下方「播放队列 N 首」可点任意曲目跳转，结束时自动下一首。
 - 可选 CLI 验收：`cd ~/Projects/sonora_v2 && dart run tool/probe_navidrome_extras.dart --query=爱`。
 
+## 连接与曲库切换补充
+
+- 「连接」页右上「修改配置」集中维护 LMS / Navidrome 地址与账号密码；账号留空时会读取凭证路径里的旧配置。
+- 「曲库」页分条显示 **LMS 曲库** 与 **Navidrome 曲库**，点「切换」切换当前轨道：切到 LMS 自动拉起引擎，切到 Navidrome 自动停止。曲目列表与封面/歌词随轨道切换。
+- LMS 输出设备在「修改配置 → 输出设备」里扫描、选择并重命名；参数预设含「完美码率直通 / 最佳音质 / DSD直通 / USB DAC 直连」，每项参数下方有帮助说明。上次选中的设备会在下次启动自动沿用。
+- 参数要点：`-o` 输出设备名（绕过系统混音应选 USB DAC）；`-a 10:0` 表示 10ms 延迟且不允许 macOS 重采样；`-r 44100-384000` 告诉 LMS 可支持的采样率；`-D` 在 DAC 支持 DoP 时直通 DSD。
+- CLI 验收：`cd ~/Projects/sonora_v2 && dart run tool/probe_library_switch.dart`。
+
 ## 5. 注意事项
 
 - adhoc 签名无法公证：网络下载的 app 首次打开需右键「打开」；首次联网需允许「本地网络」。

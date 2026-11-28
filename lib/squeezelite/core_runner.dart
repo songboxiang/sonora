@@ -1,6 +1,8 @@
 import "dart:convert";
 import "dart:io";
 
+import "../core/settings.dart";
+
 /// 负责把随 app 打包的 squeezelite 出厂核心复制到用户可写目录并拉起子进程。
 ///
 /// 设计约束：
@@ -15,16 +17,21 @@ class CoreRunner {
     this.playerName = "Sonora",
     this.device,
     this.mac,
+    this.params,
     this.onLog,
   });
 
   final String lmsHost;
   final int lmsPort;
+
   /// slimproto 端口；不是 JSON-RPC 的 9000。
   final int slimPort;
   final String playerName;
   final String? device;
   final String? mac;
+
+  /// 可选：来自「修改配置」的完整参数集。提供后覆盖 device/name/mac 的简写。
+  final CoreParams? params;
   final void Function(String line)? onLog;
 
   Process? _process;
@@ -94,10 +101,20 @@ class CoreRunner {
     String playerName = "Sonora",
     String? device,
     String? mac,
+    CoreParams? params,
   }) {
+    if (params != null) {
+      return buildCoreArgs(
+        params: params,
+        lmsHost: lmsHost,
+        slimPort: slimPort,
+        mac: mac ?? "",
+      );
+    }
     final args = <String>["-s", "$lmsHost:$slimPort", "-n", playerName];
+    // -o 才是输出设备；-a 是 "<延迟>:<允许重采样>"，旧代码误用了 -a。
     if (device != null && device.isNotEmpty) {
-      args.addAll(<String>["-a", device]);
+      args.addAll(<String>["-o", device]);
     }
     if (mac != null && mac.isNotEmpty) {
       args.addAll(<String>["-m", mac]);
@@ -106,10 +123,7 @@ class CoreRunner {
   }
 
   /// 确保用户目录里有可执行核心；不存在则从 bundle/开发目录复制。
-  Future<String> ensureCore({
-    String? bundledPath,
-    String? userPath,
-  }) async {
+  Future<String> ensureCore({String? bundledPath, String? userPath}) async {
     final destPath = userPath ?? userCorePath();
     final dest = File(destPath);
     if (dest.existsSync()) return destPath;
@@ -127,7 +141,11 @@ class CoreRunner {
     // chmod / quarantine 失败不应阻断启动，但要在日志里留痕。
     final chmod = await Process.run("chmod", ["755", destPath]);
     if (chmod.exitCode != 0) _log("chmod 失败：${chmod.stderr}");
-    final xattr = await Process.run("xattr", ["-d", "com.apple.quarantine", destPath]);
+    final xattr = await Process.run("xattr", [
+      "-d",
+      "com.apple.quarantine",
+      destPath,
+    ]);
     if (xattr.exitCode != 0 &&
         !xattr.stderr.toString().contains("No such xattr")) {
       _log("去 quarantine 失败：${xattr.stderr}");
@@ -136,21 +154,25 @@ class CoreRunner {
   }
 
   /// 自动复制核心（如需）并拉起子进程。
-  Future<Process> start({
-    String? bundledPath,
-    String? userPath,
-  }) async {
+  Future<Process> start({String? bundledPath, String? userPath}) async {
     if (_process != null) return _process!;
 
-    final corePath = await ensureCore(bundledPath: bundledPath, userPath: userPath);
-    final effectiveMac = mac ??
-        macFromSeed("sonora:${Platform.localHostname}:${Platform.environment["USER"] ?? ""}");
+    final corePath = await ensureCore(
+      bundledPath: bundledPath,
+      userPath: userPath,
+    );
+    final effectiveMac =
+        mac ??
+        macFromSeed(
+          "sonora:${Platform.localHostname}:${Platform.environment["USER"] ?? ""}",
+        );
     final args = buildArgs(
       lmsHost: lmsHost,
       slimPort: slimPort,
       playerName: playerName,
       device: device,
       mac: effectiveMac,
+      params: params,
     );
     _log("启动 $corePath ${args.join(" ")}");
 

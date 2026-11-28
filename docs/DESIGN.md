@@ -115,6 +115,7 @@ disconnected
 | M2 | 播放器选择持久化 + 无播放器指引 | probe 无在线播放器时 UI 有明确指引 |
 | P1（已完成） | Navidrome `clientStream` 音频闭环：`NavidromeAudio` + `just_audio` + 曲库点歌播放 + 音源互斥 | CLI `/rest/stream` 返回 `audio/flac`；UI 自动播放加载 273s 流并 seek 到 136s，位置回读 136s |
 | N1（已完成） | Navidrome 体验补齐：search3 服务端搜索、带 token 的封面、getAlbumInfo2/getArtistInfo2 简介、结构化歌词、当前曲目列表即播放队列与结束后自动下一首 | `flutter analyze/test`（51 项）全绿；`dart run tool/probe_navidrome_extras.dart` 打印搜索/封面/歌词/简介/队列计数与 verdict；UI 曲库页搜索、封面与简介，播放页封面、逐行歌词与可点击队列 |
+| L1（已完成） | 连接/曲库重构：连接页集中 LMS+Navidrome 地址凭证与「修改配置」；曲库页分条显示 LMS/Navidrome 并一键切换，切到 LMS 自动拉起引擎、切走自动停止；输出设备扫描/命名与音质参数面板 | `lib/core/settings.dart` 持久化 `settings.json`（记住上次输出设备、账号、轨道）；`lib/lms/library.dart` 读取 LMS 专辑/曲目并走 LMS playlist 播放；修正 `CoreRunner` 把输出设备误写成 `-a` 的问题，改为 `-o`（`-a` 实际是延迟:重采样）；预设「完美码率直通 / 最佳音质 / DSD直通 / USB DAC 直连」并逐项提供 `-o/-n/-a/-r/-D/-b/-M` 帮助释意。`flutter analyze` 无问题、`flutter test` 63 项全绿；`dart run tool/probe_library_switch.dart` 真实服务验收：LMS 60 张专辑、首张 14 首、扫描到 1 个设备、完整参数启动后在线播放器 1 个，verdict=PASS |
 | M4（已完成） | release 打包 / adhoc 签名 / zip+dmg 归档 / 安装到 `/Applications` | `bash tool/package.sh` 一条命令：`flutter analyze/test/build --release` → 核心 sha256 校验 → 核心单独 adhoc 签名 → 签名后回写 manifest → `--deep` 签整包 → 去 quarantine → `dist/Sonora-<ver>.zip` + `.dmg` + `SHA256SUMS`；安装版实测首次启动时从 bundle 自动复制核心，播放器 `connected=1` |
 | U1（已完成） | 升级页主体/核心两轨「下载 + 校验」，不自动替换 | `lib/core/updates.dart`：atom 版本/发布说明、SourceForge RSS（版本+md5+filesize+链接）纯解析 + 单测；`verifyAppArchive`（下载 zip → SHA256SUMS 校验 → zip 内含 `Sonora.app/Contents/Info.plist`）、`verifyCoreArchive`（下载 dmg → md5+size → 挂载 → 二进制 sha256）→ `VerifyResult`。UI 新增第 4 个「升级」页签，headless 钩子 `SONORA_AUTO_UPDATE=1` + `SONORA_APP_ZIP`/`SONORA_APP_SUMS`/`SONORA_CORE_VERIFY`。端到端实测：主体 19MB zip（SHA256+结构通过）、核心 2.3MB dmg（md5+size+sha256 通过）；篡改 zip 被 SHA256 拒绝停在 hash 阶段 |
 | U2（已完成） | 主体/核心「替换 + 回滚」：`lib/core/installer.dart` 备份→暂存→同目录 rename 交换→健康检查→失败自动回滚；两轨均支持按备份 ID 手动回滚 | `dart run tool/probe_install.dart` 在临时目录模拟 `/Applications` 与用户核心目录：主体 2.0.18→2.1.0 替换成功、回滚回 2.0.18；核心 dmg 校验→签名→安装后 hash=`244e440d...`，手动回滚恢复原 hash=`46857580...`；模拟健康检查失败时 `rolledBack=true` 且旧二进制 hash 完整恢复。UI 第 4 页签新增「安装替换主体 / 核心」「回滚主体 / 核心」与备份选择器；headless 追加 `SONORA_APP_INSTALL` / `SONORA_CORE_INSTALL` / `SONORA_ROLLBACK` 与假目标路径注入 |
@@ -125,7 +126,7 @@ disconnected
 
 注意 P0/M3 依赖一个**真实在线播放器**，但不再依赖人工启动。app/probe 负责把打包核心复制到用户目录并拉起。LMS 的 `players count` 会把已断开的残留条目算进去，因此一律用 `connected == 1` 判定在线；若在线数为 0，按「core 启动日志 → LMS 凭证 → 音频设备」顺序诊断。
 
-升级轨数据来源约束：`github.com/songboxiang/sonora` 只有 tag 没有正式 GitHub Release，Releases API 返回 404，`releases.atom` 只给版本号与 tag 链接、没有 asset 地址。因此主体下载 URL 由升级页手动填写（配合 `SHA256SUMS` 地址），校验逻辑不假设任何固定下载地址；远端确实发布 asset 后可直接填入。核心轨相反，SourceForge RSS 自带 md5/filesize/下载链接，全自动。两轨下载校验后可直接替换，见 U2。
+升级轨数据来源约束：`github.com/songboxiang/sonora` 只有 tag 没有正式 GitHub Release，Releases API 返回 404，`releases.atom` 只给版本号与 tag 链接、没有 asset 地址。因此主体下载 URL 由升级页手动填写（配合 `SHA256SUMS` 地址），校验逻辑不假设任何固定下载地址；远端确实发布 asset 后可直接填入。核心轨相反，SourceForge RSS 自带 md5/filesize/下载链接，全自动。两轨下载校验后可直接替换，见 U2。连接与曲库配置见 L1。
 
 macOS 本地网络权限：app 已声明 `NSLocalNetworkUsageDescription` 并使用独立 bundle id `com.songboxiang.sonora.v2`。首次手动打开时若系统询问“是否允许访问本地网络”，必须点允许，否则 LMS/Navidrome 连接会以 `No route to host` 失败。SSH 下的无界面进程没有授权界面，因此该场景的验证以命令行探针和 root 授权进程为准。
 
