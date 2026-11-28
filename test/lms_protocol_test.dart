@@ -75,6 +75,19 @@ void main() {
     expect(s.position, 42);
     expect(s.volume, 50);
     expect(s.artworkUrl, "http://192.168.199.2:9000/music/123/cover");
+    expect(s.coverId, "123");
+  });
+
+  test("status parses string time returned after a paused seek", () {
+    final s = parseLmsStatus(
+      j(
+        "{\"result\":{\"mode\":\"pause\",\"time\":\"200\","
+        "\"duration\":\"464.898\"}}",
+      ),
+      "http://lms:9000",
+    );
+    expect(s.position, 200);
+    expect(s.duration, 464);
   });
 
   test("version comparison handles mixed formats", () {

@@ -21,6 +21,9 @@ import "squeezelite/core_runner.dart";
 bool sonoraAutoRestore = true;
 bool sonoraSkipCoverEnrichment = false;
 
+/// Headless verification must not persist its temporary library/player state.
+bool sonoraHeadless = false;
+
 void main() => runApp(const SonoraApp());
 
 class SonoraApp extends StatelessWidget {
@@ -118,6 +121,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   SongInfo? _currentSong;
   AudioInfo? _audioInfo;
   String _lastAudioTrackId = "";
+  bool _seeking = false;
+  double _seekValue = 0;
 
   /// 连接页当前展开配置的服务器 key："lms" 或 OpenSubsonic 的 server id。
   String _selectedServerKey = "lms";
@@ -127,7 +132,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   // 升级页（主体 / 核心下载校验，不做自动替换）
   final _appZipUrl = TextEditingController();
   final _appSumsUrl = TextEditingController();
-  String _appCurrent = "2.1.0";
+  String _appCurrent = "2.1.1";
   String _appLatest = "-";
   List<String> _appNotes = <String>[];
   VerifyResult? _appVerify;
@@ -386,7 +391,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         if (v != null && v.isNotEmpty) return v;
       } catch (_) {}
     }
-    return "2.1.0";
+    return "2.1.1";
   }
 
   Future<void> _checkUpdates() async {
@@ -1234,6 +1239,68 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }).toList();
   }
 
+  double _progressValue() {
+    final d = _status.duration;
+    if (_seeking) {
+      return _seekValue.clamp(0.0, d <= 0 ? 1.0 : d.toDouble());
+    }
+    if (d <= 0) return 0;
+    final pos = _status.position;
+    return pos > d ? d.toDouble() : pos.toDouble();
+  }
+
+  Widget _playbackCover() {
+    const side = 180.0;
+    const radius = BorderRadius.all(Radius.circular(12));
+    if (_source == "navidrome") {
+      final url = _currentSong?.coverUrl ?? _status.artworkUrl;
+      if (url.isNotEmpty) {
+        return ClipRRect(
+          borderRadius: radius,
+          child: Image.network(
+            url,
+            width: side,
+            height: side,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox(
+              width: side,
+              height: side,
+              child: Icon(Icons.album),
+            ),
+          ),
+        );
+      }
+    } else {
+      final cid = _status.coverId;
+      final target = _target;
+      if (cid.isNotEmpty && target != null) {
+        return ClipRRect(
+          borderRadius: radius,
+          child: Image(
+            image: LmsCoverImage(target: target, coverId: cid, size: 360),
+            width: side,
+            height: side,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox(
+              width: side,
+              height: side,
+              child: Icon(Icons.album),
+            ),
+          ),
+        );
+      }
+    }
+    return Container(
+      width: side,
+      height: side,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: radius,
+      ),
+      child: const Icon(Icons.album, size: 64, color: Colors.grey),
+    );
+  }
+
   Widget _albumCover(AlbumInfo album) {
     if (_activeLibrary == "lms") {
       final cid = album.coverId;
@@ -1513,7 +1580,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       ..appSumsUrl = _appSumsUrl.text.trim()
       ..coreParams = _coreParams;
     try {
-      await _settingsStore.save(_settings);
+      if (!sonoraHeadless) await _settingsStore.save(_settings);
       _log(
         "配置已保存（上次输出设备：${_coreParams.device.isEmpty ? '默认' : _coreParams.device}）",
       );
@@ -1828,6 +1895,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       position: position,
       volume: _volume,
       artworkUrl: song?.coverUrl ?? "",
+      coverId: song?.coverId ?? "",
     );
   }
 
@@ -1928,11 +1996,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   }
 
   Future<void> _seek(int seconds) async {
+    if (mounted) {
+      setState(() => _status = _status.copyWith(position: seconds));
+    }
     if (_source == "navidrome") {
       await _audio?.seek(Duration(seconds: seconds));
       return;
     }
-    await _command(["seek", seconds.toString()], "跳转");
+    await _command(lmsSeekCommand(seconds), "跳转");
   }
 
   Future<void> _setVolume(int value) async {
@@ -1970,6 +2041,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   /// startup auto-restore must connect, register a player, load albums and
   /// issue a play command on the first track of the first album.
   Future<void> _verifyLmsAutoPlay() async {
+    sonoraHeadless = true;
+    // Headless verification always exercises the LMS track, regardless of the
+    // library persisted on this machine. It never writes settings.
+    _activeLibrary = "lms";
+    _source = "lms";
     // Cover enrichment issues ~60 songinfo requests; skip it in this check so
     // the play path can be verified quickly.
     sonoraSkipCoverEnrichment = true;
@@ -1990,6 +2066,19 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     await _playLmsSong(songs.first);
     await Future.delayed(const Duration(seconds: 3));
     await _refreshStatus();
+    final coverId = await lmsTrackCoverId(
+      _target!,
+      _status.trackId,
+      onError: (m) => _log("封面 $m"),
+    );
+    _log("LMS 验证封面 coverId=$coverId");
+    final seekTo = _status.duration > 30 ? 30 : 0;
+    if (seekTo > 0) {
+      await _seek(seekTo);
+      await Future.delayed(const Duration(seconds: 2));
+      await _refreshStatus();
+      _log("LMS 验证跳转 position=${_status.position} / ${_status.duration}");
+    }
     _log(
       "LMS 验证完成：播放器 $_playerId，播放 ${songs.first.title}，"
       "当前状态 ${_status.mode} / ${_status.title}",
@@ -2039,6 +2128,18 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     setState(() => _audioInfo = info);
   }
 
+  Future<void> _refreshLmsCover(String trackId) async {
+    final target = _target;
+    if (target == null || trackId.isEmpty) return;
+    final cid = await lmsTrackCoverId(
+      target,
+      trackId,
+      onError: (m) => _log("封面 $m"),
+    );
+    if (!mounted || cid.isEmpty || _status.trackId != trackId) return;
+    setState(() => _status = _status.copyWith(coverId: cid));
+  }
+
   Future<void> _refreshStatus() async {
     final target = _target;
     final id = _playerId;
@@ -2052,6 +2153,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     if (s.trackId.isNotEmpty && s.trackId != _lastAudioTrackId) {
       _lastAudioTrackId = s.trackId;
       unawaited(_refreshLmsAudioInfo(s.trackId));
+      unawaited(_refreshLmsCover(s.trackId));
     }
   }
 
@@ -2390,38 +2492,29 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   Text(_status.artist.isEmpty ? "" : "艺人：${_status.artist}"),
                   Text(_status.album.isEmpty ? "" : "专辑：${_status.album}"),
                   _qualityCard(),
-                  if (_source == "navidrome" &&
-                      _currentSong != null &&
-                      _currentSong!.coverUrl.isNotEmpty)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.network(
-                        _currentSong!.coverUrl,
-                        width: 140,
-                        height: 140,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const SizedBox(
-                          width: 140,
-                          height: 140,
-                          child: Icon(Icons.album),
-                        ),
-                      ),
-                    ),
+                  _playbackCover(),
                   const SizedBox(height: 12),
                   Text(
                     "${formatDuration(_status.position)} / ${formatDuration(_status.duration)}",
                   ),
                   Slider(
-                    value: _status.duration == 0
-                        ? 0
-                        : (_status.position > _status.duration
-                              ? _status.duration.toDouble()
-                              : _status.position.toDouble()),
+                    value: _progressValue(),
                     max: _status.duration == 0
                         ? 1
                         : _status.duration.toDouble(),
-                    onChanged: (_) {},
-                    onChangeEnd: (v) => unawaited(_seek(v.round())),
+                    onChanged: (v) {
+                      setState(() {
+                        _seeking = true;
+                        _seekValue = v;
+                      });
+                    },
+                    onChangeEnd: (v) {
+                      setState(() {
+                        _seeking = false;
+                        _seekValue = v;
+                      });
+                      unawaited(_seek(v.round()));
+                    },
                   ),
                   if (_source == "navidrome" && _lyrics.isNotEmpty) ...<Widget>[
                     const Text(

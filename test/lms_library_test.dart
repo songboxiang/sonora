@@ -121,6 +121,11 @@ void main() {
     );
   });
 
+  test("seek command uses LMS time, not unsupported seek", () {
+    expect(lmsSeekCommand(120), equals(<String>["time", "120"]));
+    expect(lmsSeekCommand(0), equals(<String>["time", "0"]));
+  });
+
   test("representative tracks are one distinct id per album", () {
     final tracks = parseLmsTracks(
       j(

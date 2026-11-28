@@ -160,6 +160,10 @@ class PlaybackStatus {
   final int volume;
   final String artworkUrl;
   final String trackId;
+
+  /// LMS cover art id from songinfo tags:Gc. NetworkImage cannot attach the
+  /// Basic Auth header, so the UI needs the raw id for LmsCoverImage.
+  final String coverId;
   const PlaybackStatus({
     this.mode = "stop",
     this.title = "",
@@ -170,8 +174,35 @@ class PlaybackStatus {
     this.volume = 100,
     this.artworkUrl = "",
     this.trackId = "",
+    this.coverId = "",
   });
   bool get isPlaying => mode == "play";
+
+  PlaybackStatus copyWith({
+    String? mode,
+    String? title,
+    String? artist,
+    String? album,
+    int? duration,
+    int? position,
+    int? volume,
+    String? artworkUrl,
+    String? trackId,
+    String? coverId,
+  }) {
+    return PlaybackStatus(
+      mode: mode ?? this.mode,
+      title: title ?? this.title,
+      artist: artist ?? this.artist,
+      album: album ?? this.album,
+      duration: duration ?? this.duration,
+      position: position ?? this.position,
+      volume: volume ?? this.volume,
+      artworkUrl: artworkUrl ?? this.artworkUrl,
+      trackId: trackId ?? this.trackId,
+      coverId: coverId ?? this.coverId,
+    );
+  }
 }
 
 class PlayerInfo {

@@ -316,6 +316,10 @@ Map<String, String> lmsRepresentativeTracks(List<SongInfo> tracks) {
   return out;
 }
 
+/// LMS does not implement a seek player command; it is silently ignored.
+/// The supported absolute jump is time SECONDS (verified on a live server).
+List<String> lmsSeekCommand(int seconds) => <String>["time", seconds.toString()];
+
 Future<bool> playLmsTrack(
   LmsTarget target,
   String playerId,

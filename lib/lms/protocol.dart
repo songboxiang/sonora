@@ -15,7 +15,8 @@ String _str(dynamic v) => v == null ? "" : v.toString();
 
 int _int(dynamic v) {
   if (v is num) return v.toInt();
-  return int.tryParse(v.toString()) ?? 0;
+  final s = v.toString();
+  return int.tryParse(s) ?? double.tryParse(s)?.toInt() ?? 0;
 }
 
 Map<String, dynamic> lmsResult(Map<String, dynamic> root) =>
@@ -86,6 +87,7 @@ PlaybackStatus parseLmsStatus(Map<String, dynamic> root, String base) {
     album: _str(m["album"] ?? cur["album"]),
     duration: _int(m["duration"]),
     position: _int(m["time"]),
+    coverId: artId,
     volume: vol,
     artworkUrl: artId.isEmpty ? "" : "$base/music/$artId/cover",
     trackId: _str(m["id"]).isNotEmpty ? _str(m["id"]) : _str(cur["id"]),
