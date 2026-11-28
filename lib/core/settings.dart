@@ -1,7 +1,7 @@
 import "dart:convert";
 import "dart:io";
 
-/// 两条曲库轨道。切换轨道会改变引擎与播放方式。
+/// 两条曲库轨道。navidrome 内部标识表示 OpenSubsonic 客户端流轨道。
 enum LibraryTrack { lms, navidrome }
 
 /// `squeezelite -l` 输出的一行设备。
@@ -229,6 +229,62 @@ List<String> buildCoreArgs({
   return args;
 }
 
+/// 一台兼容 OpenSubsonic / Subsonic 的服务器配置。
+class OpenSubsonicServer {
+  const OpenSubsonicServer({
+    required this.id,
+    required this.name,
+    this.host = "",
+    this.user = "",
+    this.password = "",
+    this.credsPath = "",
+  });
+
+  final String id;
+  final String name;
+  final String host;
+  final String user;
+  final String password;
+  final String credsPath;
+
+  OpenSubsonicServer copyWith({
+    String? id,
+    String? name,
+    String? host,
+    String? user,
+    String? password,
+    String? credsPath,
+  }) {
+    return OpenSubsonicServer(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      host: host ?? this.host,
+      user: user ?? this.user,
+      password: password ?? this.password,
+      credsPath: credsPath ?? this.credsPath,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    "id": id,
+    "name": name,
+    "host": host,
+    "user": user,
+    "password": password,
+    "credsPath": credsPath,
+  };
+
+  static OpenSubsonicServer fromJson(Map<String, dynamic> m) =>
+      OpenSubsonicServer(
+        id: (m["id"] ?? "").toString(),
+        name: (m["name"] ?? "我的音乐服务器").toString(),
+        host: (m["host"] ?? "").toString(),
+        user: (m["user"] ?? "").toString(),
+        password: (m["password"] ?? "").toString(),
+        credsPath: (m["credsPath"] ?? "").toString(),
+      );
+}
+
 /// 全部可持久化的界面配置。
 class AppSettings {
   AppSettings({
@@ -238,15 +294,21 @@ class AppSettings {
     this.lmsUser = "",
     this.lmsPassword = "",
     this.lmsCredsPath = "/Users/song/.squeezelite_gui/config.json",
-    this.navHost = "192.168.199.2:4533",
-    this.navUser = "",
-    this.navPassword = "",
-    this.navCredsPath = "/Users/song/navidrome_creds.json",
+    List<OpenSubsonicServer>? servers,
+    this.activeServerId = "default",
     this.activeLibrary = "lms",
     this.appZipUrl = "",
     this.appSumsUrl = "",
     this.coreParams = const CoreParams(),
-  });
+  }) : servers =
+           servers ??
+           <OpenSubsonicServer>[
+             const OpenSubsonicServer(
+               id: "default",
+               name: "我的音乐服务器",
+               host: "192.168.199.2:4533",
+             ),
+           ];
 
   String lmsHost;
   String lmsPort;
@@ -254,14 +316,52 @@ class AppSettings {
   String lmsUser;
   String lmsPassword;
   String lmsCredsPath;
-  String navHost;
-  String navUser;
-  String navPassword;
-  String navCredsPath;
+  List<OpenSubsonicServer> servers;
+  String activeServerId;
   String activeLibrary;
   String appZipUrl;
   String appSumsUrl;
   CoreParams coreParams;
+
+  /// 当前选中的 OpenSubsonic 服务器。
+  OpenSubsonicServer? get activeServer {
+    if (servers.isEmpty) return null;
+    for (final s in servers) {
+      if (s.id == activeServerId) return s;
+    }
+    return servers.first;
+  }
+
+  /// 兼容旧字段名的读写口，便于平滑迁移。
+  String get navHost => activeServer?.host ?? "";
+  set navHost(String value) => _patchActive(host: value);
+  String get navUser => activeServer?.user ?? "";
+  set navUser(String value) => _patchActive(user: value);
+  String get navPassword => activeServer?.password ?? "";
+  set navPassword(String value) => _patchActive(password: value);
+  String get navCredsPath => activeServer?.credsPath ?? "";
+  set navCredsPath(String value) => _patchActive(credsPath: value);
+
+  void _patchActive({
+    String? host,
+    String? user,
+    String? password,
+    String? credsPath,
+  }) {
+    if (servers.isEmpty) {
+      servers.add(const OpenSubsonicServer(id: "default", name: "我的音乐服务器"));
+      activeServerId = "default";
+    }
+    final index = servers.indexWhere((s) => s.id == activeServerId);
+    final i = index >= 0 ? index : 0;
+    servers[i] = servers[i].copyWith(
+      host: host,
+      user: user,
+      password: password,
+      credsPath: credsPath,
+    );
+    activeServerId = servers[i].id;
+  }
 
   /// 上一次实际使用的输出设备，下次启动默认选中。
   String get lastDevice => coreParams.device;
@@ -273,6 +373,8 @@ class AppSettings {
     "lmsUser": lmsUser,
     "lmsPassword": lmsPassword,
     "lmsCredsPath": lmsCredsPath,
+    "servers": servers.map((s) => s.toJson()).toList(),
+    "activeServerId": activeServerId,
     "navHost": navHost,
     "navUser": navUser,
     "navPassword": navPassword,
@@ -283,27 +385,55 @@ class AppSettings {
     "coreParams": coreParams.toJson(),
   };
 
-  static AppSettings fromJson(Map<String, dynamic> m) => AppSettings(
-    lmsHost: (m["lmsHost"] ?? "192.168.199.2").toString(),
-    lmsPort: (m["lmsPort"] ?? "9000").toString(),
-    slimPort: (m["slimPort"] ?? "3483").toString(),
-    lmsUser: (m["lmsUser"] ?? "").toString(),
-    lmsPassword: (m["lmsPassword"] ?? "").toString(),
-    lmsCredsPath:
-        (m["lmsCredsPath"] ?? "/Users/song/.squeezelite_gui/config.json")
-            .toString(),
-    navHost: (m["navHost"] ?? "192.168.199.2:4533").toString(),
-    navUser: (m["navUser"] ?? "").toString(),
-    navPassword: (m["navPassword"] ?? "").toString(),
-    navCredsPath: (m["navCredsPath"] ?? "/Users/song/navidrome_creds.json")
-        .toString(),
-    activeLibrary: (m["activeLibrary"] ?? "lms").toString(),
-    appZipUrl: (m["appZipUrl"] ?? "").toString(),
-    appSumsUrl: (m["appSumsUrl"] ?? "").toString(),
-    coreParams: m["coreParams"] is Map<String, dynamic>
-        ? CoreParams.fromJson(m["coreParams"] as Map<String, dynamic>)
-        : const CoreParams(),
-  );
+  static AppSettings fromJson(Map<String, dynamic> m) {
+    final rawServers = m["servers"];
+    var servers = <OpenSubsonicServer>[];
+    if (rawServers is List) {
+      for (final item in rawServers) {
+        if (item is Map<String, dynamic>) {
+          servers.add(OpenSubsonicServer.fromJson(item));
+        }
+      }
+    }
+    if (servers.isEmpty) {
+      final host = (m["navHost"] ?? "").toString();
+      final user = (m["navUser"] ?? "").toString();
+      final password = (m["navPassword"] ?? "").toString();
+      final creds = (m["navCredsPath"] ?? "").toString();
+      servers.add(
+        OpenSubsonicServer(
+          id: "default",
+          name: "我的音乐服务器",
+          host: host.isEmpty ? "192.168.199.2:4533" : host,
+          user: user,
+          password: password,
+          credsPath: creds.isEmpty ? "/Users/song/navidrome_creds.json" : creds,
+        ),
+      );
+    }
+    var activeServerId = (m["activeServerId"] ?? "").toString();
+    if (!servers.any((s) => s.id == activeServerId)) {
+      activeServerId = servers.first.id;
+    }
+    return AppSettings(
+      lmsHost: (m["lmsHost"] ?? "192.168.199.2").toString(),
+      lmsPort: (m["lmsPort"] ?? "9000").toString(),
+      slimPort: (m["slimPort"] ?? "3483").toString(),
+      lmsUser: (m["lmsUser"] ?? "").toString(),
+      lmsPassword: (m["lmsPassword"] ?? "").toString(),
+      lmsCredsPath:
+          (m["lmsCredsPath"] ?? "/Users/song/.squeezelite_gui/config.json")
+              .toString(),
+      servers: servers,
+      activeServerId: activeServerId,
+      activeLibrary: (m["activeLibrary"] ?? "lms").toString(),
+      appZipUrl: (m["appZipUrl"] ?? "").toString(),
+      appSumsUrl: (m["appSumsUrl"] ?? "").toString(),
+      coreParams: m["coreParams"] is Map<String, dynamic>
+          ? CoreParams.fromJson(m["coreParams"] as Map<String, dynamic>)
+          : const CoreParams(),
+    );
+  }
 }
 
 /// 用户目录下的 JSON 配置；密码只落在本机，不写日志。

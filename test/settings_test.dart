@@ -46,6 +46,46 @@ void main() {
       expect(decoded.coreParams.dop, isTrue);
     });
 
+    test("旧版单服务器配置迁移为默认服务器", () {
+      final decoded = AppSettings.fromJson(<String, dynamic>{
+        "navHost": "10.0.0.8:4533",
+        "navUser": "legacy",
+        "navPassword": "secret",
+      });
+      expect(decoded.servers.length, 1);
+      expect(decoded.servers.first.name, "我的音乐服务器");
+      expect(decoded.servers.first.host, "10.0.0.8:4533");
+      expect(decoded.activeServerId, decoded.servers.first.id);
+    });
+
+    test("多服务器配置往返保留名称与当前选择", () {
+      final s = AppSettings();
+      s.servers = <OpenSubsonicServer>[
+        const OpenSubsonicServer(
+          id: "nas",
+          name: "家里 NAS",
+          host: "10.0.0.2:4533",
+          user: "u1",
+          password: "p1",
+        ),
+        const OpenSubsonicServer(
+          id: "office",
+          name: "办公室",
+          host: "10.0.0.3:4533",
+          user: "u2",
+          password: "p2",
+        ),
+      ];
+      s.activeServerId = "office";
+      final decoded = AppSettings.fromJson(
+        jsonDecode(jsonEncode(s.toJson())) as Map<String, dynamic>,
+      );
+      expect(decoded.servers.length, 2);
+      expect(decoded.servers.last.name, "办公室");
+      expect(decoded.activeServer?.name, "办公室");
+      expect(decoded.navHost, "10.0.0.3:4533");
+    });
+
     test("SettingsStore 写入后可读回，损坏文件回退默认", () async {
       final dir = Directory.systemTemp.createTempSync("sonora-settings-test-");
       addTearDown(() => dir.deleteSync(recursive: true));

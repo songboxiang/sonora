@@ -49,6 +49,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   final _lmsCreds = TextEditingController(
     text: "/Users/song/.squeezelite_gui/config.json",
   );
+  final _navName = TextEditingController(text: "我的音乐服务器");
   final _navHost = TextEditingController(text: "192.168.199.2:4533");
   final _navCreds = TextEditingController(
     text: "/Users/song/navidrome_creds.json",
@@ -66,6 +67,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   final _extraCtrl = TextEditingController();
   final _settingsStore = SettingsStore();
   late AppSettings _settings;
+  OpenSubsonicServer? get _activeServer => _settings.activeServer;
+  String get _currentServerName => _activeServer?.name ?? "我的音乐服务器";
   CoreParams _coreParams = const CoreParams();
   bool _editMode = false;
   List<OutputDevice> _deviceOptions = <OutputDevice>[];
@@ -124,10 +127,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _user.text = _settings.lmsUser;
     _pass.text = _settings.lmsPassword;
     _lmsCreds.text = _settings.lmsCredsPath;
-    _navHost.text = _settings.navHost;
-    _navUser.text = _settings.navUser;
-    _navPass.text = _settings.navPassword;
-    _navCreds.text = _settings.navCredsPath;
+    _loadActiveServerIntoControllers();
     _appZipUrl.text = _settings.appZipUrl;
     _appSumsUrl.text = _settings.appSumsUrl;
     _activeLibrary = _settings.activeLibrary == "navidrome"
@@ -198,6 +198,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _user,
       _pass,
       _lmsCreds,
+      _navName,
       _navHost,
       _navCreds,
       _navUser,
@@ -571,7 +572,13 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
 
     return <Widget>[
-      const Text("Navidrome", style: TextStyle(fontWeight: FontWeight.bold)),
+      const Text(
+        "OpenSubsonic 服务器（兼容 Navidrome 等）",
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      ..._serverEditorWidgets(),
+      const SizedBox(height: 8),
+      _field("服务器名称", _navName, onChanged: (_) => markCustom()),
       _field("地址（IP:端口）", _navHost, onChanged: (_) => markCustom()),
       _field("账号", _navUser, onChanged: (_) => markCustom()),
       _field("密码", _navPass, obscure: true, onChanged: (_) => markCustom()),
@@ -770,7 +777,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         label: const Text("加载专辑"),
       ),
       const Divider(),
-      Text("专辑 ${_albums.length} 张（入口以专辑为准）"),
+      Text("专辑 ${_albums.length} 张 · $_currentServerName（入口以专辑为准）"),
       if (_albumNote.isNotEmpty) _infoCard("专辑简介", _albumNote),
       if (_artistBio.isNotEmpty) _infoCard("艺人简介", _artistBio),
       ..._albums.map(
@@ -811,8 +818,161 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     );
   }
 
+  void _loadActiveServerIntoControllers() {
+    final s = _activeServer;
+    _navName.text = s?.name ?? "我的音乐服务器";
+    _navHost.text = s?.host ?? "";
+    _navUser.text = s?.user ?? "";
+    _navPass.text = s?.password ?? "";
+    _navCreds.text = s?.credsPath ?? "";
+  }
+
+  void _syncActiveServerFromControllers() {
+    final s = _activeServer;
+    final name = _navName.text.trim().isEmpty
+        ? "我的音乐服务器"
+        : _navName.text.trim();
+    final host = _navHost.text.trim();
+    final user = _navUser.text.trim();
+    final password = _navPass.text;
+    final credsPath = _navCreds.text.trim();
+    if (s == null) {
+      final created = OpenSubsonicServer(
+        id: "default",
+        name: name,
+        host: host,
+        user: user,
+        password: password,
+        credsPath: credsPath,
+      );
+      _settings.servers.add(created);
+      _settings.activeServerId = created.id;
+      return;
+    }
+    final index = _settings.servers.indexWhere((item) => item.id == s.id);
+    if (index >= 0) {
+      _settings.servers[index] = s.copyWith(
+        name: name,
+        host: host,
+        user: user,
+        password: password,
+        credsPath: credsPath,
+      );
+    }
+  }
+
+  List<Widget> _serverEditorWidgets() {
+    final items = <Widget>[];
+    for (final s in _settings.servers) {
+      final active = s.id == _settings.activeServerId;
+      items.add(
+        Card(
+          child: ListTile(
+            selected: active,
+            leading: Icon(active ? Icons.cloud_done : Icons.cloud_outlined),
+            title: Text(s.name),
+            subtitle: Text(s.host.isEmpty ? "未设置地址" : s.host),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (!active)
+                  TextButton(
+                    onPressed: () => unawaited(_selectServer(s.id)),
+                    child: const Text("切换"),
+                  ),
+                IconButton(
+                  tooltip: "删除服务器",
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: _settings.servers.length <= 1
+                      ? null
+                      : () => unawaited(_deleteServer(s.id)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    items.add(
+      OutlinedButton.icon(
+        onPressed: _addServer,
+        icon: const Icon(Icons.add),
+        label: const Text("添加服务器"),
+      ),
+    );
+    return items;
+  }
+
+  Future<void> _selectServer(String id) async {
+    _syncActiveServerFromControllers();
+    if (id == _settings.activeServerId) return;
+    if (mounted) {
+      setState(() => _settings.activeServerId = id);
+    } else {
+      _settings.activeServerId = id;
+    }
+    _loadActiveServerIntoControllers();
+    await _saveSettings();
+    if (_activeLibrary == "navidrome") await _loadAlbums();
+    _log("已切换到服务器：$_currentServerName");
+  }
+
+  void _addServer() {
+    _syncActiveServerFromControllers();
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+    final created = OpenSubsonicServer(
+      id: id,
+      name: "新服务器 ${_settings.servers.length + 1}",
+      host: _navHost.text.trim(),
+      user: _navUser.text.trim(),
+      password: _navPass.text,
+      credsPath: _navCreds.text.trim(),
+    );
+    if (mounted) {
+      setState(() {
+        _settings.servers.add(created);
+        _settings.activeServerId = id;
+      });
+    } else {
+      _settings.servers.add(created);
+      _settings.activeServerId = id;
+    }
+    _loadActiveServerIntoControllers();
+    _log("已添加服务器，请修改名称与地址后保存");
+  }
+
+  Future<void> _deleteServer(String id) async {
+    if (_settings.servers.length <= 1) {
+      _log("至少保留一台服务器");
+      return;
+    }
+    _syncActiveServerFromControllers();
+    final removed = _settings.servers.firstWhere(
+      (s) => s.id == id,
+      orElse: () => _settings.servers.first,
+    );
+    if (mounted) {
+      setState(() {
+        _settings.servers.removeWhere((s) => s.id == id);
+        if (_settings.activeServerId == id) {
+          _settings.activeServerId = _settings.servers.first.id;
+        }
+      });
+    } else {
+      _settings.servers.removeWhere((s) => s.id == id);
+      if (_settings.activeServerId == id) {
+        _settings.activeServerId = _settings.servers.first.id;
+      }
+    }
+    _loadActiveServerIntoControllers();
+    await _saveSettings();
+    if (_activeLibrary == "navidrome") await _loadAlbums();
+    _log("已删除服务器：${removed.name}");
+  }
+
   Future<void> _saveSettings() async {
     _coreParams = _collectParamsFromFields();
+    _syncActiveServerFromControllers();
     _settings
       ..lmsHost = _host.text.trim()
       ..lmsPort = _port.text.trim()
@@ -820,10 +980,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       ..lmsUser = _user.text.trim()
       ..lmsPassword = _pass.text
       ..lmsCredsPath = _lmsCreds.text.trim()
-      ..navHost = _navHost.text.trim()
-      ..navUser = _navUser.text.trim()
-      ..navPassword = _navPass.text
-      ..navCredsPath = _navCreds.text.trim()
       ..activeLibrary = _activeLibrary
       ..appZipUrl = _appZipUrl.text.trim()
       ..appSumsUrl = _appSumsUrl.text.trim()
@@ -880,10 +1036,52 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _log("已套用音质预设：${coreProfiles[profile] ?? profile}");
   }
 
+  Future<void> _switchServer(String id) async {
+    if (id == _settings.activeServerId && _activeLibrary == "navidrome") {
+      _log("已经是当前服务器：$_currentServerName");
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    try {
+      _syncActiveServerFromControllers();
+      final server = _settings.servers.firstWhere(
+        (s) => s.id == id,
+        orElse: () => _settings.servers.first,
+      );
+      if (mounted) {
+        setState(() {
+          _settings.activeServerId = server.id;
+          _activeLibrary = "navidrome";
+          _source = "navidrome";
+          _albums = const <AlbumInfo>[];
+          _songs = const <SongInfo>[];
+          _albumNote = "";
+          _artistBio = "";
+          _lyrics = const <LyricLine>[];
+        });
+      } else {
+        _settings.activeServerId = server.id;
+        _activeLibrary = "navidrome";
+        _source = "navidrome";
+        _albums = const <AlbumInfo>[];
+        _songs = const <SongInfo>[];
+        _albumNote = "";
+        _artistBio = "";
+        _lyrics = const <LyricLine>[];
+      }
+      _loadActiveServerIntoControllers();
+      await _stopCore();
+      await _saveSettings();
+      await _loadAlbums();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _switchLibrary(String id) async {
     if (id != "lms" && id != "navidrome") return;
     if (id == _activeLibrary) {
-      _log("已经在 ${id == "lms" ? "LMS" : "Navidrome"} 曲库");
+      _log("已经在 ${id == "lms" ? "LMS" : "OpenSubsonic"} 曲库");
       return;
     }
     if (mounted) setState(() => _busy = true);
@@ -905,7 +1103,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           _activeLibrary = "navidrome";
           _source = "navidrome";
         });
-        _log("切换到 Navidrome 曲库，引擎已自动关闭");
+        _log("切换到 OpenSubsonic 曲库（$_currentServerName），引擎已自动关闭");
         await _loadAlbums();
       }
       await _saveSettings();
@@ -948,7 +1146,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _selectedLmsAlbum = album;
       _lmsSongs = songs;
     });
-    _log("${album.name}：${songs.length} 首");
+    _log("$_currentServerName / ${album.name}：${songs.length} 首");
   }
 
   Future<void> _playLmsSong(SongInfo song) async {
@@ -1158,7 +1356,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _status = _navStatus(position: 0, playing: true);
     });
     _subscribeAudio();
-    _log("Navidrome 播放：${song.title}");
+    _log("OpenSubsonic 播放：${song.title}");
     final lines = await fetchNavidromeLyrics(target, song.id, onError: _log);
     if (!mounted) return;
     setState(() => _lyrics = lines);
@@ -1166,7 +1364,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       await _audio!.playSong(host: target.host, auth: target.auth, song: song);
       await _audio!.setVolume(_volume / 100.0);
     } catch (e) {
-      _log("Navidrome 播放失败 ${e.toString().split('\n').first}");
+      _log("OpenSubsonic 播放失败 ${e.toString().split('\n').first}");
     }
   }
 
@@ -1290,6 +1488,12 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   }
 
   NavidromeTarget? _navidromeTarget() {
+    _syncActiveServerFromControllers();
+    final host = _navHost.text.trim();
+    if (host.isEmpty) {
+      _log("请先填写 OpenSubsonic 服务器地址");
+      return null;
+    }
     var user = _navUser.text.trim();
     var pass = _navPass.text;
     if (user.isEmpty || pass.isEmpty) {
@@ -1298,11 +1502,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       pass = c["password"] ?? c["pass"] ?? "";
     }
     if (user.isEmpty || pass.isEmpty) {
-      _log("Navidrome 凭证不完整：${_navCreds.text}");
+      _log("OpenSubsonic 服务器 $_currentServerName 凭证不完整：${_navCreds.text}");
       return null;
     }
     return NavidromeTarget(
-      host: _navHost.text.trim(),
+      host: host,
       auth: SubsonicAuth(
         user: user,
         password: pass,
@@ -1319,11 +1523,12 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     try {
       final info = await probeNavidrome(
         target,
-        onError: (m) => _log("Navidrome $m"),
+        onError: (m) => _log("OpenSubsonic $m"),
       );
       _log(
-        "Navidrome ${info.version.isEmpty ? '未知版本' : info.version} "
-        "${info.reachable ? 'ok' : '失败'}",
+        "OpenSubsonic 服务器 $_currentServerName "
+        "${info.version.isEmpty ? "未知版本" : info.version} "
+        "${info.reachable ? "ok" : "失败"}",
       );
       final albums = await fetchNavidromeAlbums(
         target,
@@ -1334,7 +1539,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         _albums = albums;
         _songs = const <SongInfo>[];
       });
-      _log("专辑 ${albums.length} 张");
+      _log("$_currentServerName 专辑 ${albums.length} 张");
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1361,7 +1566,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _artistBio = bio;
       _lyrics = const <LyricLine>[];
     });
-    _log("${album.name}：${songs.length} 首");
+    _log("$_currentServerName / ${album.name}：${songs.length} 首");
   }
 
   Future<void> _searchNavidrome() async {
@@ -1383,7 +1588,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _lyrics = const <LyricLine>[];
       _busy = false;
     });
-    _log("搜索 '$query'：专辑 ${r.albums.length} / 歌曲 ${r.songs.length}");
+    _log(
+      "$_currentServerName 搜索 $query：专辑 ${r.albums.length} / 歌曲 ${r.songs.length}",
+    );
   }
 
   int _currentLyricIndex() {
@@ -1564,8 +1771,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   _statusRow("播放器数量", _playerCount < 0 ? "-" : "$_playerCount"),
                   _statusRow("核心状态", _coreStatus),
                   _statusRow(
+                    "OpenSubsonic",
+                    "$_currentServerName（${_navHost.text.isEmpty ? "未设置" : _navHost.text}）",
+                  ),
+                  _statusRow(
                     "当前曲库",
-                    _activeLibrary == "lms" ? "LMS" : "Navidrome",
+                    _activeLibrary == "lms"
+                        ? "LMS"
+                        : "OpenSubsonic · $_currentServerName",
                   ),
                   _statusRow(
                     "输出设备",
@@ -1587,7 +1800,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    "音源：${_source == "navidrome" ? "Navidrome 客户端流" : "LMS 外部播放器"}",
+                    "音源：${_source == "navidrome" ? "OpenSubsonic 客户端流（$_currentServerName）" : "LMS 外部播放器"}",
                   ),
                   Text(
                     _status.title.isEmpty ? "未播放" : _status.title,
@@ -1752,24 +1965,54 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                     ),
                   ),
                   Card(
-                    child: ListTile(
-                      selected: _activeLibrary == "navidrome",
-                      leading: const Icon(Icons.audiotrack),
-                      title: const Text("Navidrome 曲库"),
-                      subtitle: Text(
-                        _activeLibrary == "navidrome"
-                            ? "当前轨道 · 客户端流"
-                            : "切换后自动关闭引擎",
-                      ),
-                      trailing: _activeLibrary == "navidrome"
-                          ? const Icon(Icons.check_circle, color: Colors.indigo)
-                          : ElevatedButton(
-                              onPressed: _busy
-                                  ? null
-                                  : () =>
-                                        unawaited(_switchLibrary("navidrome")),
-                              child: const Text("切换"),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        ListTile(
+                          selected: _activeLibrary == "navidrome",
+                          leading: const Icon(Icons.audiotrack),
+                          title: const Text("OpenSubsonic 曲库"),
+                          subtitle: Text(
+                            _activeLibrary == "navidrome"
+                                ? "当前轨道 · 客户端流 · $_currentServerName"
+                                : "切换后自动关闭引擎",
+                          ),
+                          trailing: _activeLibrary == "navidrome"
+                              ? const Icon(
+                                  Icons.check_circle,
+                                  color: Colors.indigo,
+                                )
+                              : ElevatedButton(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => unawaited(
+                                          _switchLibrary("navidrome"),
+                                        ),
+                                  child: const Text("切换"),
+                                ),
+                        ),
+                        if (_activeLibrary == "navidrome")
+                          ..._settings.servers.map(
+                            (s) => ListTile(
+                              selected: s.id == _settings.activeServerId,
+                              leading: const Icon(Icons.cloud_outlined),
+                              title: Text(s.name),
+                              subtitle: Text(s.host.isEmpty ? "未设置地址" : s.host),
+                              trailing: s.id == _settings.activeServerId
+                                  ? const Icon(
+                                      Icons.check_circle,
+                                      color: Colors.indigo,
+                                    )
+                                  : TextButton(
+                                      onPressed: _busy
+                                          ? null
+                                          : () =>
+                                                unawaited(_switchServer(s.id)),
+                                      child: const Text("切换"),
+                                    ),
                             ),
+                          ),
+                      ],
                     ),
                   ),
                   const Divider(),
