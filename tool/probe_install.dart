@@ -34,7 +34,7 @@ Future<void> main(List<String> args) async {
   final tmp = Directory.systemTemp.createTempSync("sonora-upgrade-e2e-");
   final home = opt["home"] ?? tmp.path;
   final repo = Directory.current.path;
-  final zip = opt["zip"] ?? "$repo/dist/Sonora-2.1.1.zip";
+  final zip = opt["zip"] ?? "$repo/dist/Sonora-2.1.2.zip";
   final sums = opt["sums"] ?? "$repo/dist/SHA256SUMS";
   final appTarget = opt["app-target"] ?? "${tmp.path}/Applications/Sonora.app";
   final coreTarget =

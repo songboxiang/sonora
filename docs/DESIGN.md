@@ -124,7 +124,7 @@ disconnected
 | U1（已完成） | 升级页主体/核心两轨「下载 + 校验」，不自动替换 | `lib/core/updates.dart`：atom 版本/发布说明、SourceForge RSS（版本+md5+filesize+链接）纯解析 + 单测；`verifyAppArchive`（下载 zip → SHA256SUMS 校验 → zip 内含 `Sonora.app/Contents/Info.plist`）、`verifyCoreArchive`（下载 dmg → md5+size → 挂载 → 二进制 sha256）→ `VerifyResult`。UI 新增第 4 个「升级」页签，headless 钩子 `SONORA_AUTO_UPDATE=1` + `SONORA_APP_ZIP`/`SONORA_APP_SUMS`/`SONORA_CORE_VERIFY`。端到端实测：主体 19MB zip（SHA256+结构通过）、核心 2.3MB dmg（md5+size+sha256 通过）；篡改 zip 被 SHA256 拒绝停在 hash 阶段 |
 | U2（已完成） | 主体/核心「替换 + 回滚」：`lib/core/installer.dart` 备份→暂存→同目录 rename 交换→健康检查→失败自动回滚；两轨均支持按备份 ID 手动回滚 | `dart run tool/probe_install.dart` 在临时目录模拟 `/Applications` 与用户核心目录：主体 2.0.18→2.1.0 替换成功、回滚回 2.0.18；核心 dmg 校验→签名→安装后 hash=`244e440d...`，手动回滚恢复原 hash=`46857580...`；模拟健康检查失败时 `rolledBack=true` 且旧二进制 hash 完整恢复。UI 第 4 页签新增「安装替换主体 / 核心」「回滚主体 / 核心」与备份选择器；headless 追加 `SONORA_APP_INSTALL` / `SONORA_CORE_INSTALL` / `SONORA_ROLLBACK` 与假目标路径注入 |
 
-发布版本：与主线延续，v2 重写版首个正式包为 **2.1.1**（`pubspec.yaml` 的 `version: 2.1.1+2`）；`CFBundleShortVersionString=2.1.0`，高于远端 `v2.0.18`。归档输出到 `dist/`（已 gitignore）。
+发布版本：与主线延续，v2 重写版首个正式包为 **2.1.2**（`pubspec.yaml` 的 `version: 2.1.2+3`）；`CFBundleShortVersionString=2.1.0`，高于远端 `v2.0.18`。归档输出到 `dist/`（已 gitignore）。
 
 签名顺序要点：核心 `Resources/Core/squeezelite` 是裸 Mach-O，`codesign --deep` 不会自动签它，必须先单独 `codesign --force --sign -`；签名会改变文件 sha256，所以要在签整包**之前**用签名后 hash 回写 bundle 内的 `core-manifest.json`，否则 manifest 与实际分发核心不符、自检必然失败。
 

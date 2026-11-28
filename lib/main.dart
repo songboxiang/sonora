@@ -132,7 +132,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   // 升级页（主体 / 核心下载校验，不做自动替换）
   final _appZipUrl = TextEditingController();
   final _appSumsUrl = TextEditingController();
-  String _appCurrent = "2.1.1";
+  String _appCurrent = "2.1.2";
   String _appLatest = "-";
   List<String> _appNotes = <String>[];
   VerifyResult? _appVerify;
@@ -391,7 +391,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         if (v != null && v.isNotEmpty) return v;
       } catch (_) {}
     }
-    return "2.1.1";
+    return "2.1.2";
   }
 
   Future<void> _checkUpdates() async {
@@ -2081,7 +2081,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
     _log(
       "LMS 验证完成：播放器 $_playerId，播放 ${songs.first.title}，"
-      "当前状态 ${_status.mode} / ${_status.title}",
+      "当前状态 ${_status.mode} / ${_status.title}，封面 ${_status.coverId}",
     );
   }
 
@@ -2146,8 +2146,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     if (target == null || id == null || id.isEmpty) return;
     final s = await fetchLmsStatus(target, id, onError: (m) => _log("状态 $m"));
     if (!mounted) return;
+    // LMS status does not carry artwork_track_id. Keep the cover id already
+    // resolved from songinfo while the same track is playing, otherwise the
+    // 2-second poll would clear it and the art would flash back to the icon.
+    final coverId = s.coverId.isNotEmpty
+        ? s.coverId
+        : (s.trackId == _status.trackId ? _status.coverId : "");
     setState(() {
-      _status = s;
+      _status = s.copyWith(coverId: coverId);
       _volume = s.volume;
     });
     if (s.trackId.isNotEmpty && s.trackId != _lastAudioTrackId) {
