@@ -196,22 +196,24 @@ Future<List<AlbumInfo>> enrichLmsAlbumsWithCovers(
   void Function(String)? onError,
 }) async {
   if (albums.isEmpty) return albums;
+  // `tracks 0 N <album>` ignores the search term on this LMS build, so every
+  // album resolved to the same first track and therefore the same cover.
+  // Fetch the catalogue once and pick a real representative per album.
+  final tracks = await fetchLmsTracks(target, count: 3000, onError: onError);
+  if (tracks.isEmpty) return albums;
+  final representative = lmsRepresentativeTracks(tracks);
   final coverByAlbum = <String, String>{};
-  final queue = List<AlbumInfo>.from(albums);
+  final keys = representative.keys.toList();
+  var cursor = 0;
   final workers = List.generate(concurrency, (_) async {
-    while (queue.isNotEmpty) {
-      final album = queue.removeAt(0);
-      if (coverByAlbum.containsKey(album.name)) continue;
-      final root = await lmsRpc(target, [
-        "",
-        ["tracks", 0, 8, album.name],
-      ], quiet: true);
-      if (root == null) continue;
-      final tracks = parseLmsTracks(root);
-      if (tracks.isEmpty) continue;
-      // One songinfo request per album is enough; cover art is album-wide.
-      final cid = await lmsTrackCoverId(target, tracks.first.id);
-      if (cid.isNotEmpty) coverByAlbum[album.name] = cid;
+    while (cursor < keys.length) {
+      final name = keys[cursor++];
+      final cid = await lmsTrackCoverId(
+        target,
+        representative[name] ?? "",
+        onError: onError,
+      );
+      if (cid.isNotEmpty) coverByAlbum[name] = cid;
     }
   });
   await Future.wait(workers);
@@ -296,6 +298,24 @@ Future<List<GenreInfo>> fetchLmsGenres(
 }
 
 /// 让当前 LMS 播放器播放指定曲目 id。
+/// LMS silently ignores `playlist play <numericId>` (that command expects a
+/// URL). Loading through playlistcontrol with a `track_id:` item is the only
+/// reliable way to play a library track; verified against a live server.
+List<String> lmsPlayCommand(String trackId) {
+  final item = trackId.startsWith("track_id:") ? trackId : "track_id:$trackId";
+  return <String>["playlistcontrol", "cmd:load", item];
+}
+
+/// Pick one representative track id per album name, preserving server order.
+Map<String, String> lmsRepresentativeTracks(List<SongInfo> tracks) {
+  final out = <String, String>{};
+  for (final t in tracks) {
+    if (t.album.isEmpty || t.id.isEmpty) continue;
+    out.putIfAbsent(t.album, () => t.id);
+  }
+  return out;
+}
+
 Future<bool> playLmsTrack(
   LmsTarget target,
   String playerId,
@@ -305,7 +325,7 @@ Future<bool> playLmsTrack(
   if (playerId.isEmpty || trackId.isEmpty) return false;
   final root = await lmsRpc(target, [
     playerId,
-    ["playlist", "play", trackId],
+    lmsPlayCommand(trackId),
   ], onError: onError);
   return root != null;
 }

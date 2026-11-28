@@ -109,4 +109,31 @@ void main() {
     expect(a.genre, "Pop");
     expect(a.metaText, contains("2020"));
   });
+
+  test("play command uses playlistcontrol track_id, not playlist play", () {
+    expect(
+      lmsPlayCommand("4425"),
+      equals(<String>["playlistcontrol", "cmd:load", "track_id:4425"]),
+    );
+    expect(
+      lmsPlayCommand("track_id:4425"),
+      equals(<String>["playlistcontrol", "cmd:load", "track_id:4425"]),
+    );
+  });
+
+  test("representative tracks are one distinct id per album", () {
+    final tracks = parseLmsTracks(
+      j(
+        "{\"result\":{\"titles_loop\":["
+        "{\"id\":11,\"title\":\"a1\",\"album\":\"甲\"},"
+        "{\"id\":12,\"title\":\"a2\",\"album\":\"甲\"},"
+        "{\"id\":21,\"title\":\"b1\",\"album\":\"乙\"},"
+        "{\"id\":22,\"title\":\"b2\",\"album\":\"乙\"},"
+        "{\"id\":31,\"title\":\"c1\",\"album\":\"丙\"}]}}",
+      ),
+    );
+    final picked = lmsRepresentativeTracks(tracks);
+    expect(picked.length, 3);
+    expect(picked, equals(<String, String>{"甲": "11", "乙": "21", "丙": "31"}));
+  });
 }

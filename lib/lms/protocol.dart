@@ -72,18 +72,23 @@ PlaybackStatus parseLmsStatus(Map<String, dynamic> root, String base) {
   final m = lmsResult(root);
   final art = m["artwork_track_id"] ?? m["coverid"];
   final artId = _str(art);
-  final rawVol = m["volume"];
+  // LMS 9.x puts the current title/id only in playlist_loop; top-level
+  // "title"/"id" are absent, so fall back to the current queue entry.
+  final loop = _asList(m["playlist_loop"]);
+  final idx = _int(m["playlist_cur_index"]).clamp(0, loop.isEmpty ? 0 : loop.length - 1);
+  final cur = loop.isEmpty ? <String, dynamic>{} : (_asMap(loop[idx]) ?? <String, dynamic>{});
+  final rawVol = m["mixer volume"] ?? m["volume"];
   final vol = rawVol == null ? 100 : lmsToSlider(_int(rawVol));
   return PlaybackStatus(
     mode: _str(m["mode"]).isEmpty ? "stop" : _str(m["mode"]),
-    title: _str(m["title"]),
-    artist: _str(m["artist"]),
-    album: _str(m["album"]),
+    title: _str(m["title"]).isNotEmpty ? _str(m["title"]) : _str(cur["title"]),
+    artist: _str(m["artist"] ?? cur["artist"]),
+    album: _str(m["album"] ?? cur["album"]),
     duration: _int(m["duration"]),
     position: _int(m["time"]),
     volume: vol,
     artworkUrl: artId.isEmpty ? "" : "$base/music/$artId/cover",
-    trackId: _str(m["id"]),
+    trackId: _str(m["id"]).isNotEmpty ? _str(m["id"]) : _str(cur["id"]),
   );
 }
 

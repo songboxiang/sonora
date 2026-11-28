@@ -153,6 +153,27 @@ class CoreRunner {
     return destPath;
   }
 
+  /// 上一次 app 退出时可能留下孤儿核心；同名同 MAC 的僵尸进程会占住 LMS
+  /// 播放器槽位并卡在 SYN_SENT，导致新的核心连上后仍无法播放。启动前只清理
+  /// 可执行文件正是本 app 用户目录核心的进程，不影响系统里的其他 squeezelite。
+  Future<void> _cleanupStaleCores(String corePath) async {
+    try {
+      final r = await Process.run("ps", ["-ax", "-o", "pid=,command="]);
+      if (r.exitCode != 0) return;
+      for (final line in r.stdout.toString().split("\n")) {
+        if (!line.contains(corePath)) continue;
+        final parts = line.trimLeft().split(RegExp(r"\s+"));
+        final otherPid = int.tryParse(parts.first);
+        if (otherPid == null || otherPid == pid) continue;
+        try {
+          Process.killPid(otherPid);
+          _log("清理残留核心 pid=$otherPid");
+        } catch (_) {}
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+    } catch (_) {}
+  }
+
   /// 自动复制核心（如需）并拉起子进程。
   Future<Process> start({String? bundledPath, String? userPath}) async {
     if (_process != null) return _process!;
@@ -174,6 +195,7 @@ class CoreRunner {
       mac: effectiveMac,
       params: params,
     );
+    await _cleanupStaleCores(corePath);
     _log("启动 $corePath ${args.join(" ")}");
 
     final p = await Process.start(corePath, args);

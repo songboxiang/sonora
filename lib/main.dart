@@ -1992,7 +1992,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     await _refreshStatus();
     _log(
       "LMS 验证完成：播放器 $_playerId，播放 ${songs.first.title}，"
-      "当前状态 ${_status.title}",
+      "当前状态 ${_status.mode} / ${_status.title}",
     );
   }
 

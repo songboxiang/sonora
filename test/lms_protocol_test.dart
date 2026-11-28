@@ -97,4 +97,20 @@ void main() {
     expect(a.bitrateText, "815 kbps VBR");
     expect(a.lossless, isTrue);
   });
+
+  test("parseLmsStatus falls back to current playlist entry for title/id", () {
+    final s = parseLmsStatus(
+      j(
+        "{\"result\":{\"mode\":\"play\",\"duration\":258.173,"
+        "\"mixer volume\":100,\"playlist_cur_index\":\"0\","
+        "\"playlist_loop\":[{\"title\":\"01 一场游戏一场梦\","
+        "\"id\":4425,\"playlist index\":0}]}}",
+      ),
+      "http://lms:9000",
+    );
+    expect(s.mode, "play");
+    expect(s.title, "01 一场游戏一场梦");
+    expect(s.trackId, "4425");
+    expect(s.volume, 100);
+  });
 }

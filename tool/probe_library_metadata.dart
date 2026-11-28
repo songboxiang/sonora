@@ -55,6 +55,13 @@ Future<void> main() async {
     out["lmsWithArtist"] = lmsAlbums.where((a) => a.artist.isNotEmpty).length;
     out["lmsWithGenre"] = lmsAlbums.where((a) => a.genre.isNotEmpty).length;
     out["lmsWithCover"] = lmsAlbums.where((a) => a.coverId.isNotEmpty).length;
+    out["lmsDistinctCovers"] =
+        lmsAlbums.map((a) => a.coverId).where((s) => s.isNotEmpty).toSet().length;
+    out["lmsCoverSample"] = lmsAlbums
+        .where((a) => a.coverId.isNotEmpty)
+        .take(3)
+        .map((a) => <String, dynamic>{"name": a.name, "coverId": a.coverId})
+        .toList();
     out["lmsSample"] = lmsAlbums.isEmpty
         ? <String, dynamic>{}
         : <String, dynamic>{

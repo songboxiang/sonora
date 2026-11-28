@@ -452,12 +452,19 @@ class AppSettings {
 }
 
 /// 用户目录下的 JSON 配置；密码只落在本机，不写日志。
+/// Test-only override so widget tests never read or write the developer's real
+/// settings file. Production never sets this.
+String? sonoraSettingsPathOverride;
+
 class SettingsStore {
   SettingsStore({String? path}) : path = path ?? SettingsStore.defaultPath();
 
-  static String defaultPath({String? home}) =>
-      "${home ?? Platform.environment["HOME"] ?? ""}"
-      "/Library/Application Support/Sonora/settings.json";
+  static String defaultPath({String? home}) {
+    final override = sonoraSettingsPathOverride;
+    if (override != null && override.isNotEmpty) return override;
+    return "${home ?? Platform.environment["HOME"] ?? ""}"
+        "/Library/Application Support/Sonora/settings.json";
+  }
 
   final String path;
 

@@ -1,11 +1,24 @@
 // UI 层冒烟测试：验证服务器管理页、纯曲库页、播放效果面板与升级页真实渲染。
+import "dart:io";
+
 import "package:flutter_test/flutter_test.dart";
+import "package:sonora/core/settings.dart";
 import "package:sonora/main.dart";
 
 void main() {
+ late Directory testHome;
+
   setUp(() {
-    // Widget tests must not trigger real LMS/OpenSubsonic network or core start.
+    // Widget tests must not trigger real LMS/OpenSubsonic network or core start,
+    // nor touch the developer's persisted settings.
     sonoraAutoRestore = false;
+    testHome = Directory.systemTemp.createTempSync("sonora-ui-test");
+    sonoraSettingsPathOverride = "${testHome.path}/settings.json";
+  });
+
+  tearDown(() {
+    sonoraSettingsPathOverride = null;
+    if (testHome.existsSync()) testHome.deleteSync(recursive: true);
   });
 
   Future<void> pumpApp(WidgetTester tester) async {
