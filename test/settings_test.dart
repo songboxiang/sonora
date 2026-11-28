@@ -126,4 +126,28 @@ void main() {
       }
     });
   });
+
+  test("LMS 服务器名称可持久化", () {
+    final s = AppSettings()..lmsName = "客厅 LMS";
+    final decoded = AppSettings.fromJson(
+      jsonDecode(jsonEncode(s.toJson())) as Map<String, dynamic>,
+    );
+    expect(decoded.lmsName, "客厅 LMS");
+  });
+
+  test("空凭证路径自动回退到默认凭证文件", () {
+    final decoded = AppSettings.fromJson(<String, dynamic>{
+      "servers": <dynamic>[
+        <String, dynamic>{
+          "id": "default",
+          "name": "我的音乐服务器",
+          "host": "192.168.199.2:4533",
+          "user": "",
+          "password": "",
+          "credsPath": "",
+        },
+      ],
+    });
+    expect(decoded.activeServer?.credsPath, defaultNavCredsPath);
+  });
 }

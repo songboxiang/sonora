@@ -1,4 +1,4 @@
-// UI 层冒烟测试：验证四个页签、多服务器入口、曲库切换与音质面板真实渲染。
+// UI 层冒烟测试：验证服务器管理页、纯曲库页、播放效果面板与升级页真实渲染。
 import "package:flutter_test/flutter_test.dart";
 import "package:sonora/main.dart";
 
@@ -15,34 +15,45 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets("四个页签与连接页关键字段渲染", (tester) async {
+  testWidgets("四个页签与音乐服务器列表渲染", (tester) async {
     await pumpApp(tester);
     expect(find.text("Sonora v2"), findsOneWidget);
     for (final label in ["连接", "播放", "曲库", "升级"]) {
       expect(find.text(label), findsWidgets);
     }
-    expect(find.text("连接并自动拉起核心"), findsOneWidget);
-    expect(find.text("停止核心"), findsOneWidget);
-    await settle(tester);
-  });
-
-  testWidgets("修改配置后展示 OpenSubsonic 服务器列表和添加入口", (tester) async {
-    await pumpApp(tester);
-    await tester.tap(find.text("修改配置"));
-    await tester.pumpAndSettle();
-    expect(find.textContaining("OpenSubsonic 服务器"), findsOneWidget);
+    expect(find.text("音乐服务器"), findsOneWidget);
+    expect(find.text("我的 LMS 服务器"), findsOneWidget);
     expect(find.text("我的音乐服务器"), findsWidgets);
     expect(find.text("添加服务器"), findsOneWidget);
+    expect(find.text("切换"), findsWidgets);
+    expect(find.text("修改"), findsWidgets);
     await settle(tester);
   });
 
-  testWidgets("曲库页展示 LMS 与 OpenSubsonic 切换入口及服务器列表", (tester) async {
+  testWidgets("LMS 服务器下直接展示设备扫描、命名与参数配置", (tester) async {
+    await pumpApp(tester);
+    // 显式选中 LMS，避免依赖用户上次持久化的轨道。
+    await tester.tap(find.text("修改").first);
+    await tester.pumpAndSettle();
+    expect(find.text("服务器配置"), findsOneWidget);
+    expect(find.text("扫描设备"), findsOneWidget);
+    expect(find.textContaining("设备显示名称"), findsOneWidget);
+    expect(find.text("参数配置"), findsOneWidget);
+    expect(find.text("连接并自动拉起核心"), findsOneWidget);
+    expect(find.text("停止核心"), findsOneWidget);
+    expect(find.text("保存配置"), findsOneWidget);
+    await settle(tester);
+  });
+
+  testWidgets("曲库页只保留曲库功能与连接状态", (tester) async {
     await pumpApp(tester);
     await tester.tap(find.text("曲库").first);
     await tester.pumpAndSettle();
-    expect(find.text("LMS 曲库"), findsOneWidget);
-    expect(find.text("OpenSubsonic 曲库"), findsOneWidget);
-    expect(find.text("我的音乐服务器"), findsWidgets);
+    expect(find.text("曲库"), findsWidgets);
+    expect(find.textContaining("连接状态"), findsOneWidget);
+    expect(find.text("搜索歌曲 / 专辑"), findsOneWidget);
+    expect(find.text("加载专辑"), findsOneWidget);
+    expect(find.text("曲库轨道"), findsNothing);
     await settle(tester);
   });
 

@@ -59,6 +59,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   final _navSearch = TextEditingController();
   final _deviceNameCtrl = TextEditingController();
   final _playerNameCtrl = TextEditingController(text: "Sonora-UI");
+  final _lmsNameCtrl = TextEditingController(text: "我的 LMS 服务器");
   final _latencyCtrl = TextEditingController(text: "10");
   final _ratesCtrl = TextEditingController(text: "44100-384000");
   final _streamBufCtrl = TextEditingController(text: "2048");
@@ -70,7 +71,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   OpenSubsonicServer? get _activeServer => _settings.activeServer;
   String get _currentServerName => _activeServer?.name ?? "我的音乐服务器";
   CoreParams _coreParams = const CoreParams();
-  bool _editMode = false;
   List<OutputDevice> _deviceOptions = <OutputDevice>[];
   String _activeLibrary = "lms";
   List<AlbumInfo> _lmsAlbums = <AlbumInfo>[];
@@ -101,6 +101,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   AudioInfo? _audioInfo;
   String _lastAudioTrackId = "";
 
+  /// 连接页当前展开配置的服务器 key："lms" 或 OpenSubsonic 的 server id。
+  String _selectedServerKey = "lms";
+  String _navStatusText = "未检测";
+  bool _navConnected = false;
+
   // 升级页（主体 / 核心下载校验，不做自动替换）
   final _appZipUrl = TextEditingController();
   final _appSumsUrl = TextEditingController();
@@ -123,6 +128,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _settings = _settingsStore.load();
+    _lmsNameCtrl.text = _settings.lmsName;
     _host.text = _settings.lmsHost;
     _port.text = _settings.lmsPort;
     _slim.text = _settings.slimPort;
@@ -136,6 +142,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         ? "navidrome"
         : "lms";
     _source = _activeLibrary;
+    _selectedServerKey = _activeLibrary == "lms"
+        ? "lms"
+        : _settings.activeServerId;
     _coreParams = _settings.coreParams;
     _syncParamControllers();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -200,6 +209,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _user,
       _pass,
       _lmsCreds,
+      _lmsNameCtrl,
       _navName,
       _navHost,
       _navCreds,
@@ -566,33 +576,224 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _extraCtrl.text = _coreParams.extraArgs;
   }
 
-  List<Widget> _configEditorWidgets() {
+  List<Widget> _serverListWidgets() {
+    final items = <Widget>[
+      Card(
+        child: ListTile(
+          selected: _selectedServerKey == "lms",
+          leading: const Icon(Icons.dns_outlined),
+          title: Text(_settings.lmsName),
+          subtitle: Text(
+            "${_settings.lmsHost}:${_settings.lmsPort} · $_lmsVersion",
+          ),
+          trailing: Wrap(
+            spacing: 4,
+            children: <Widget>[
+              if (_activeLibrary != "lms")
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () => unawaited(_switchLibrary("lms")),
+                  child: const Text("切换"),
+                ),
+              TextButton(
+                onPressed: () => unawaited(_selectServerConfig("lms")),
+                child: const Text("修改"),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ];
+    for (final server in _settings.servers) {
+      final active =
+          _settings.activeServerId == server.id &&
+          _activeLibrary == "navidrome";
+      items.add(
+        Card(
+          child: ListTile(
+            selected: _selectedServerKey == server.id,
+            leading: const Icon(Icons.cloud_outlined),
+            title: Text(server.name),
+            subtitle: Text(
+              server.host.isEmpty
+                  ? "未设置地址"
+                  : "${server.host} · ${server.id == _settings.activeServerId ? _navStatusText : "未选中"}",
+            ),
+            trailing: Wrap(
+              spacing: 4,
+              children: <Widget>[
+                if (active && _selectedServerKey != server.id)
+                  const Icon(Icons.check_circle, color: Colors.indigo),
+                if (!active)
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => unawaited(_switchServer(server.id)),
+                    child: const Text("切换"),
+                  ),
+                TextButton(
+                  onPressed: () => unawaited(_selectServerConfig(server.id)),
+                  child: const Text("修改"),
+                ),
+                IconButton(
+                  tooltip: "删除服务器",
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: _settings.servers.length <= 1
+                      ? null
+                      : () => unawaited(_deleteServer(server.id)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    items.add(
+      OutlinedButton.icon(
+        onPressed: _addServer,
+        icon: const Icon(Icons.add),
+        label: const Text("添加服务器"),
+      ),
+    );
+    return items;
+  }
+
+  Future<void> _selectServerConfig(String key) async {
+    if (key != "lms" && _selectedServerKey != "lms") {
+      _syncActiveServerFromControllers();
+    }
+    if (key == "lms") {
+      if (mounted) setState(() => _selectedServerKey = "lms");
+      return;
+    }
+    final server = _settings.servers.firstWhere(
+      (item) => item.id == key,
+      orElse: () => _settings.servers.first,
+    );
+    if (mounted) {
+      setState(() {
+        _settings.activeServerId = server.id;
+        _selectedServerKey = server.id;
+      });
+    } else {
+      _settings.activeServerId = server.id;
+      _selectedServerKey = server.id;
+    }
+    _loadActiveServerIntoControllers();
+    await _saveSettings();
+    await _testNavConnection();
+  }
+
+  Future<void> _testNavConnection() async {
+    final target = _navidromeTarget();
+    if (target == null) {
+      if (mounted) {
+        setState(() {
+          _navConnected = false;
+          _navStatusText = "未连接 · 凭证不完整";
+        });
+      }
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    try {
+      final info = await probeNavidrome(
+        target,
+        onError: (m) => _log("OpenSubsonic $m"),
+      );
+      if (!mounted) return;
+      setState(() {
+        _navConnected = info.reachable;
+        _navStatusText = info.reachable
+            ? "已连接 · ${info.version.isEmpty ? "未知版本" : info.version}"
+            : "未连接 · ${info.statusText}";
+      });
+      _log("$_currentServerName $_navStatusText");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  List<Widget> _serverDetailWidgets() {
     void markCustom() {
       if (_coreParams.profile != "custom") {
         _coreParams = _coreParams.copyWith(profile: "custom");
       }
     }
 
+    if (_selectedServerKey != "lms") {
+      return <Widget>[
+        const Text("服务器配置", style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _field("服务器名称", _navName),
+        _field("地址（IP:端口）", _navHost),
+        _field("账号", _navUser),
+        _field("密码", _navPass, obscure: true),
+        _field("凭证路径（账号密码为空时读取）", _navCreds),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: <Widget>[
+            ElevatedButton.icon(
+              onPressed: _busy ? null : () => unawaited(_testNavConnection()),
+              icon: const Icon(Icons.link),
+              label: const Text("测试连接"),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => unawaited(_saveSettings()),
+              icon: const Icon(Icons.save),
+              label: const Text("保存配置"),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _navStatusText,
+          style: TextStyle(
+            color: _navConnected ? Colors.green.shade700 : Colors.grey.shade700,
+          ),
+        ),
+      ];
+    }
+
     return <Widget>[
-      const Text(
-        "OpenSubsonic 服务器（兼容 Navidrome 等）",
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      ..._serverEditorWidgets(),
-      const SizedBox(height: 8),
-      _field("服务器名称", _navName, onChanged: (_) => markCustom()),
-      _field("地址（IP:端口）", _navHost, onChanged: (_) => markCustom()),
-      _field("账号", _navUser, onChanged: (_) => markCustom()),
-      _field("密码", _navPass, obscure: true, onChanged: (_) => markCustom()),
-      _field("凭证路径（账号密码为空时读取）", _navCreds),
-      const Divider(),
-      const Text("LMS", style: TextStyle(fontWeight: FontWeight.bold)),
-      _field("主机", _host, onChanged: (_) => markCustom()),
-      _field("JSON-RPC 端口", _port, onChanged: (_) => markCustom()),
-      _field("slimproto 端口", _slim, onChanged: (_) => markCustom()),
-      _field("用户名", _user, onChanged: (_) => markCustom()),
-      _field("密码", _pass, obscure: true, onChanged: (_) => markCustom()),
+      const Text("服务器配置", style: TextStyle(fontWeight: FontWeight.bold)),
+      const SizedBox(height: 6),
+      _field("服务器名称", _lmsNameCtrl),
+      _field("主机", _host),
+      _field("JSON-RPC 端口", _port),
+      _field("slimproto 端口", _slim),
+      _field("用户名（可留空，用配置文件）", _user),
+      _field("密码", _pass, obscure: true),
       _field("旧配置路径（只读导入）", _lmsCreds),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: <Widget>[
+          ElevatedButton.icon(
+            onPressed: _busy ? null : _importLmsCreds,
+            icon: const Icon(Icons.file_open_outlined),
+            label: const Text("导入凭证"),
+          ),
+          ElevatedButton.icon(
+            onPressed: _busy ? null : () => unawaited(_connect()),
+            icon: const Icon(Icons.link),
+            label: const Text("连接并自动拉起核心"),
+          ),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : () => unawaited(_stopCore()),
+            icon: const Icon(Icons.stop_circle_outlined),
+            label: const Text("停止核心"),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => unawaited(_saveSettings()),
+            icon: const Icon(Icons.save),
+            label: const Text("保存配置"),
+          ),
+        ],
+      ),
       const Divider(),
       const Text("输出设备", style: TextStyle(fontWeight: FontWeight.bold)),
       Wrap(
@@ -602,11 +803,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
             onPressed: () => unawaited(_scanOutputDevices()),
             icon: const Icon(Icons.radar),
             label: const Text("扫描设备"),
-          ),
-          OutlinedButton.icon(
-            onPressed: _importLmsCreds,
-            icon: const Icon(Icons.file_open_outlined),
-            label: const Text("导入 LMS 凭证"),
           ),
         ],
       ),
@@ -709,16 +905,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _helpText("modelName"),
       _field("额外参数", _extraCtrl, onChanged: (_) => markCustom()),
       _helpText("extraArgs"),
-      const SizedBox(height: 8),
-      ElevatedButton.icon(
-        onPressed: () async {
-          await _saveSettings();
-          if (!mounted) return;
-          setState(() => _editMode = false);
-        },
-        icon: const Icon(Icons.save),
-        label: const Text("保存配置"),
-      ),
     ];
   }
 
@@ -822,11 +1008,14 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
 
   void _loadActiveServerIntoControllers() {
     final s = _activeServer;
+    final creds = s?.credsPath ?? "";
     _navName.text = s?.name ?? "我的音乐服务器";
     _navHost.text = s?.host ?? "";
     _navUser.text = s?.user ?? "";
     _navPass.text = s?.password ?? "";
-    _navCreds.text = s?.credsPath ?? "";
+    _navCreds.text = creds.isEmpty && (s?.user ?? "").isEmpty
+        ? defaultNavCredsPath
+        : creds;
   }
 
   void _syncActiveServerFromControllers() {
@@ -837,7 +1026,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     final host = _navHost.text.trim();
     final user = _navUser.text.trim();
     final password = _navPass.text;
-    final credsPath = _navCreds.text.trim();
+    var credsPath = _navCreds.text.trim();
+    if (credsPath.isEmpty && user.isEmpty && password.isEmpty) {
+      credsPath = defaultNavCredsPath;
+      _navCreds.text = credsPath;
+    }
     if (s == null) {
       final created = OpenSubsonicServer(
         id: "default",
@@ -863,62 +1056,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
   }
 
-  List<Widget> _serverEditorWidgets() {
-    final items = <Widget>[];
-    for (final s in _settings.servers) {
-      final active = s.id == _settings.activeServerId;
-      items.add(
-        Card(
-          child: ListTile(
-            selected: active,
-            leading: Icon(active ? Icons.cloud_done : Icons.cloud_outlined),
-            title: Text(s.name),
-            subtitle: Text(s.host.isEmpty ? "未设置地址" : s.host),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (!active)
-                  TextButton(
-                    onPressed: () => unawaited(_selectServer(s.id)),
-                    child: const Text("切换"),
-                  ),
-                IconButton(
-                  tooltip: "删除服务器",
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: _settings.servers.length <= 1
-                      ? null
-                      : () => unawaited(_deleteServer(s.id)),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-    items.add(
-      OutlinedButton.icon(
-        onPressed: _addServer,
-        icon: const Icon(Icons.add),
-        label: const Text("添加服务器"),
-      ),
-    );
-    return items;
-  }
-
-  Future<void> _selectServer(String id) async {
-    _syncActiveServerFromControllers();
-    if (id == _settings.activeServerId) return;
-    if (mounted) {
-      setState(() => _settings.activeServerId = id);
-    } else {
-      _settings.activeServerId = id;
-    }
-    _loadActiveServerIntoControllers();
-    await _saveSettings();
-    if (_activeLibrary == "navidrome") await _loadAlbums();
-    _log("已切换到服务器：$_currentServerName");
-  }
-
   void _addServer() {
     _syncActiveServerFromControllers();
     final id = DateTime.now().microsecondsSinceEpoch.toString();
@@ -934,10 +1071,12 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       setState(() {
         _settings.servers.add(created);
         _settings.activeServerId = id;
+        _selectedServerKey = id;
       });
     } else {
       _settings.servers.add(created);
       _settings.activeServerId = id;
+      _selectedServerKey = id;
     }
     _loadActiveServerIntoControllers();
     _log("已添加服务器，请修改名称与地址后保存");
@@ -959,11 +1098,17 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         if (_settings.activeServerId == id) {
           _settings.activeServerId = _settings.servers.first.id;
         }
+        if (_selectedServerKey == id) {
+          _selectedServerKey = _settings.servers.first.id;
+        }
       });
     } else {
       _settings.servers.removeWhere((s) => s.id == id);
       if (_settings.activeServerId == id) {
         _settings.activeServerId = _settings.servers.first.id;
+      }
+      if (_selectedServerKey == id) {
+        _selectedServerKey = _settings.servers.first.id;
       }
     }
     _loadActiveServerIntoControllers();
@@ -976,6 +1121,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _coreParams = _collectParamsFromFields();
     _syncActiveServerFromControllers();
     _settings
+      ..lmsName = _lmsNameCtrl.text.trim().isEmpty
+          ? "我的 LMS 服务器"
+          : _lmsNameCtrl.text.trim()
       ..lmsHost = _host.text.trim()
       ..lmsPort = _port.text.trim()
       ..slimPort = _slim.text.trim()
@@ -1053,6 +1201,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {
           _settings.activeServerId = server.id;
+          _selectedServerKey = server.id;
           _activeLibrary = "navidrome";
           _source = "navidrome";
           _audioInfo = _currentSong?.audio;
@@ -1064,6 +1213,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         });
       } else {
         _settings.activeServerId = server.id;
+        _selectedServerKey = server.id;
         _activeLibrary = "navidrome";
         _source = "navidrome";
         _audioInfo = _currentSong?.audio;
@@ -1096,6 +1246,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         setState(() {
           _activeLibrary = "lms";
           _source = "lms";
+          _selectedServerKey = "lms";
           _audioInfo = const AudioInfo();
           _lastAudioTrackId = "";
         });
@@ -1519,15 +1670,22 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _log("请先填写 OpenSubsonic 服务器地址");
       return null;
     }
+    var credsPath = _navCreds.text.trim();
+    if (credsPath.isEmpty) {
+      credsPath = defaultNavCredsPath;
+      _navCreds.text = credsPath;
+    }
     var user = _navUser.text.trim();
     var pass = _navPass.text;
     if (user.isEmpty || pass.isEmpty) {
-      final c = readCreds(_navCreds.text.trim());
+      final c = readCreds(credsPath);
       user = c["user"] ?? c["lms_user"] ?? "";
       pass = c["password"] ?? c["pass"] ?? "";
     }
     if (user.isEmpty || pass.isEmpty) {
-      _log("OpenSubsonic 服务器 $_currentServerName 凭证不完整：${_navCreds.text}");
+      _navStatusText = "未连接 · 凭证不完整";
+      _navConnected = false;
+      _log("OpenSubsonic 服务器 $_currentServerName 凭证不完整：$credsPath");
       return null;
     }
     return NavidromeTarget(
@@ -1563,6 +1721,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       setState(() {
         _albums = albums;
         _songs = const <SongInfo>[];
+        _navConnected = info.reachable;
+        _navStatusText = info.reachable
+            ? "已连接 · ${info.version.isEmpty ? "未知版本" : info.version} · ${albums.length} 张专辑"
+            : "未连接 · ${info.statusText}";
       });
       _log("$_currentServerName 专辑 ${albums.length} 张");
     } finally {
@@ -1788,65 +1950,20 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      const Text(
-                        "服务器连接",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const Spacer(),
-                      OutlinedButton.icon(
-                        onPressed: () => setState(() => _editMode = !_editMode),
-                        icon: Icon(_editMode ? Icons.check : Icons.edit),
-                        label: Text(_editMode ? "完成" : "修改配置"),
-                      ),
-                    ],
+                  const Text(
+                    "音乐服务器",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 8),
-                  if (_editMode) ..._configEditorWidgets(),
-                  if (!_editMode) ...<Widget>[
-                    _field("LMS 主机", _host),
-                    _field("JSON-RPC 端口", _port),
-                    _field("slimproto 端口", _slim),
-                    _field("用户名（可留空，用配置文件）", _user),
-                    _field("密码", _pass, obscure: true),
-                    _field("旧配置路径（只读导入）", _lmsCreds),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      children: <Widget>[
-                        ElevatedButton.icon(
-                          onPressed: _busy ? null : _importLmsCreds,
-                          icon: const Icon(Icons.file_open_outlined),
-                          label: const Text("导入凭证"),
-                        ),
-                        ElevatedButton.icon(
-                          onPressed: _busy ? null : () => unawaited(_connect()),
-                          icon: const Icon(Icons.link),
-                          label: const Text("连接并自动拉起核心"),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: _busy
-                              ? null
-                              : () => unawaited(_stopCore()),
-                          icon: const Icon(Icons.stop_circle_outlined),
-                          label: const Text("停止核心"),
-                        ),
-                      ],
-                    ),
-                  ],
+                  ..._serverListWidgets(),
+                  const Divider(),
+                  ..._serverDetailWidgets(),
                   if (_busy) const LinearProgressIndicator(),
                   const Divider(),
                   _statusRow("LMS 版本", _lmsVersion),
                   _statusRow("播放器数量", _playerCount < 0 ? "-" : "$_playerCount"),
                   _statusRow("核心状态", _coreStatus),
-                  _statusRow(
-                    "OpenSubsonic",
-                    "$_currentServerName（${_navHost.text.isEmpty ? "未设置" : _navHost.text}）",
-                  ),
+                  _statusRow("OpenSubsonic 状态", _navStatusText),
                   _statusRow(
                     "当前曲库",
                     _activeLibrary == "lms"
@@ -1861,8 +1978,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    "连接时会自动把内置 squeezelite 复制到用户目录并拉起子进程；"
-                    "切换曲库会自动启停引擎，输出设备默认沿用上一次选择。",
+                    "服务器列表可切换/添加/修改/删除；选中一台后，下方显示它自己的配置。"
+                    "本地音质参数与输出设备只属于 LMS 服务器。",
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                 ],
               ),
@@ -2013,81 +2131,33 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text(
-                    "曲库轨道",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 8),
-                  Card(
-                    child: ListTile(
-                      selected: _activeLibrary == "lms",
-                      leading: const Icon(Icons.dns_outlined),
-                      title: const Text("LMS 曲库"),
-                      subtitle: Text(
-                        _activeLibrary == "lms"
-                            ? "当前轨道 · 引擎${_runner != null ? "已启动" : "未启动"}"
-                            : "切换后自动开启引擎",
-                      ),
-                      trailing: _activeLibrary == "lms"
-                          ? const Icon(Icons.check_circle, color: Colors.indigo)
-                          : ElevatedButton(
-                              onPressed: _busy
-                                  ? null
-                                  : () => unawaited(_switchLibrary("lms")),
-                              child: const Text("切换"),
-                            ),
-                    ),
-                  ),
-                  Card(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        ListTile(
-                          selected: _activeLibrary == "navidrome",
-                          leading: const Icon(Icons.audiotrack),
-                          title: const Text("OpenSubsonic 曲库"),
-                          subtitle: Text(
-                            _activeLibrary == "navidrome"
-                                ? "当前轨道 · 客户端流 · $_currentServerName"
-                                : "切换后自动关闭引擎",
-                          ),
-                          trailing: _activeLibrary == "navidrome"
-                              ? const Icon(
-                                  Icons.check_circle,
-                                  color: Colors.indigo,
-                                )
-                              : ElevatedButton(
-                                  onPressed: _busy
-                                      ? null
-                                      : () => unawaited(
-                                          _switchLibrary("navidrome"),
-                                        ),
-                                  child: const Text("切换"),
-                                ),
+                  Row(
+                    children: <Widget>[
+                      const Text(
+                        "曲库",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
                         ),
-                        if (_activeLibrary == "navidrome")
-                          ..._settings.servers.map(
-                            (s) => ListTile(
-                              selected: s.id == _settings.activeServerId,
-                              leading: const Icon(Icons.cloud_outlined),
-                              title: Text(s.name),
-                              subtitle: Text(s.host.isEmpty ? "未设置地址" : s.host),
-                              trailing: s.id == _settings.activeServerId
-                                  ? const Icon(
-                                      Icons.check_circle,
-                                      color: Colors.indigo,
-                                    )
-                                  : TextButton(
-                                      onPressed: _busy
-                                          ? null
-                                          : () =>
-                                                unawaited(_switchServer(s.id)),
-                                      child: const Text("切换"),
-                                    ),
-                            ),
-                          ),
-                      ],
-                    ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        _activeLibrary == "lms"
+                            ? "当前：$_settings.lmsName"
+                            : "当前：$_currentServerName",
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  _statusRow(
+                    "连接状态",
+                    _activeLibrary == "lms"
+                        ? "$_lmsVersion · $_coreStatus"
+                        : _navStatusText,
                   ),
                   const Divider(),
                   if (_activeLibrary == "lms") ..._lmsLibraryWidgets(),

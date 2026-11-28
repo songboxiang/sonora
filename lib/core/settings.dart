@@ -229,6 +229,9 @@ List<String> buildCoreArgs({
   return args;
 }
 
+/// 未显式填写凭证路径时的默认值。
+const String defaultNavCredsPath = "/Users/song/navidrome_creds.json";
+
 /// 一台兼容 OpenSubsonic / Subsonic 的服务器配置。
 class OpenSubsonicServer {
   const OpenSubsonicServer({
@@ -274,20 +277,29 @@ class OpenSubsonicServer {
     "credsPath": credsPath,
   };
 
-  static OpenSubsonicServer fromJson(Map<String, dynamic> m) =>
-      OpenSubsonicServer(
-        id: (m["id"] ?? "").toString(),
-        name: (m["name"] ?? "我的音乐服务器").toString(),
-        host: (m["host"] ?? "").toString(),
-        user: (m["user"] ?? "").toString(),
-        password: (m["password"] ?? "").toString(),
-        credsPath: (m["credsPath"] ?? "").toString(),
-      );
+  static OpenSubsonicServer fromJson(Map<String, dynamic> m) {
+    final user = (m["user"] ?? "").toString();
+    final password = (m["password"] ?? "").toString();
+    var credsPath = (m["credsPath"] ?? "").toString();
+    // 老配置里 credsPath 可能为空；没有内联账号密码时补默认路径，避免曲库静默为空。
+    if (credsPath.isEmpty && (user.isEmpty || password.isEmpty)) {
+      credsPath = defaultNavCredsPath;
+    }
+    return OpenSubsonicServer(
+      id: (m["id"] ?? "").toString(),
+      name: (m["name"] ?? "我的音乐服务器").toString(),
+      host: (m["host"] ?? "").toString(),
+      user: user,
+      password: password,
+      credsPath: credsPath,
+    );
+  }
 }
 
 /// 全部可持久化的界面配置。
 class AppSettings {
   AppSettings({
+    this.lmsName = "我的 LMS 服务器",
     this.lmsHost = "192.168.199.2",
     this.lmsPort = "9000",
     this.slimPort = "3483",
@@ -310,6 +322,7 @@ class AppSettings {
              ),
            ];
 
+  String lmsName;
   String lmsHost;
   String lmsPort;
   String slimPort;
@@ -367,6 +380,7 @@ class AppSettings {
   String get lastDevice => coreParams.device;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
+    "lmsName": lmsName,
     "lmsHost": lmsHost,
     "lmsPort": lmsPort,
     "slimPort": slimPort,
@@ -407,7 +421,7 @@ class AppSettings {
           host: host.isEmpty ? "192.168.199.2:4533" : host,
           user: user,
           password: password,
-          credsPath: creds.isEmpty ? "/Users/song/navidrome_creds.json" : creds,
+          credsPath: creds.isEmpty ? defaultNavCredsPath : creds,
         ),
       );
     }
@@ -416,6 +430,7 @@ class AppSettings {
       activeServerId = servers.first.id;
     }
     return AppSettings(
+      lmsName: (m["lmsName"] ?? "我的 LMS 服务器").toString(),
       lmsHost: (m["lmsHost"] ?? "192.168.199.2").toString(),
       lmsPort: (m["lmsPort"] ?? "9000").toString(),
       slimPort: (m["slimPort"] ?? "3483").toString(),
