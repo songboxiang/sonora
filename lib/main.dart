@@ -3,6 +3,7 @@ import "dart:io";
 
 import "package:flutter/material.dart";
 import "package:just_audio/just_audio.dart";
+import "package:flutter/services.dart";
 
 import "core/models.dart";
 import "core/services.dart";
@@ -48,8 +49,22 @@ class SonoraHome extends StatefulWidget {
   State<SonoraHome> createState() => _SonoraHomeState();
 }
 
-class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
+class _SonoraHomeState extends State<SonoraHome>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _settingsScaffoldKey = GlobalKey<ScaffoldState>();
+  late TabController _tabController;
+  static const _windowChannel = MethodChannel("sonora/window");
+
+  /// Mini player sits above every page except the full player.
+  bool _miniCollapsed = false;
+  Offset _miniOffset = const Offset(16, 80);
+
+  /// Playback extras.
+  PlayMode _playMode = PlayMode.sequential;
+  bool _showLyrics = true;
+  bool _showTrackInfo = false;
+  Map<String, String> _trackInfo = const <String, String>{};
   final _host = TextEditingController(text: "192.168.199.2");
   final _port = TextEditingController(text: "9000");
   final _slim = TextEditingController(text: "3483");
@@ -132,7 +147,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   // 升级页（主体 / 核心下载校验，不做自动替换）
   final _appZipUrl = TextEditingController();
   final _appSumsUrl = TextEditingController();
-  String _appCurrent = "2.1.2";
+  String _appCurrent = "2.2.0";
   String _appLatest = "-";
   List<String> _appNotes = <String>[];
   VerifyResult? _appVerify;
@@ -150,6 +165,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging && mounted) setState(() {});
+    });
     _settings = _settingsStore.load();
     _lmsNameCtrl.text = _settings.lmsName;
     _host.text = _settings.lmsHost;
@@ -165,6 +184,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         ? "navidrome"
         : "lms";
     _source = _activeLibrary;
+    _playMode = playModeFromString(_settings.playMode);
     _selectedServerKey = _activeLibrary == "lms"
         ? "lms"
         : _settings.activeServerId;
@@ -235,6 +255,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _tabController.dispose();
     _timer?.cancel();
     unawaited(_runner?.stop());
     unawaited(_audio?.dispose());
@@ -391,7 +412,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         if (v != null && v.isNotEmpty) return v;
       } catch (_) {}
     }
-    return "2.1.2";
+    return "2.2.0";
   }
 
   Future<void> _checkUpdates() async {
@@ -1190,22 +1211,19 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           child: Text("曲目 ${_expandedTracks.length} 首 · 点击直接播放"),
         ),
         ..._expandedTracks.map(
-          (s) => ListTile(
-            dense: true,
+          (s) => _songTile(
+            context,
+            s,
+            active: s.id == _status.trackId,
             leading: Text(
               s.trackText.isEmpty ? "♪" : s.trackText,
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
-            title: Text(s.title),
             subtitle: s.metaText.isEmpty
                 ? null
                 : Text(s.metaText, style: const TextStyle(fontSize: 11)),
             trailing: const Icon(Icons.play_arrow, size: 18),
-            onTap: () => unawaited(
-              _activeLibrary == "lms"
-                  ? _playLmsSong(s)
-                  : _playNavidromeSong(s),
-            ),
+            onTap: () => unawaited(_playSong(s)),
           ),
         ),
         const Divider(),
@@ -1655,6 +1673,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           _albumNote = "";
           _artistBio = "";
           _lyrics = const <LyricLine>[];
+          _trackInfo = const <String, String>{};
         });
       } else {
         _settings.activeServerId = server.id;
@@ -1856,6 +1875,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       final chosen = ours.isNotEmpty ? ours.first : online.first;
       _playerId = chosen.id;
       _log("播放器：${chosen.name} (${chosen.id})");
+      unawaited(_setPlayMode(_playMode));
       _timer?.cancel();
       _timer = Timer.periodic(
         const Duration(seconds: 2),
@@ -1950,6 +1970,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     if (target == null) return;
     await _stopCore();
     _audio ??= NavidromeAudio(onLog: _log);
+    unawaited(_setPlayMode(_playMode));
     if (!mounted) return;
     setState(() {
       _source = "navidrome";
@@ -1960,8 +1981,27 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _subscribeAudio();
     _log("OpenSubsonic 播放：${song.title}");
     final lines = await fetchNavidromeLyrics(target, song.id, onError: _log);
+    final info = <String, String>{};
+    final album = _albums.where((a) => a.name == song.album).toList();
+    if (album.isNotEmpty) {
+      final note = await fetchNavidromeAlbumNote(
+        target,
+        album.first.id,
+        onError: _log,
+      );
+      final bio = await fetchNavidromeArtistBio(
+        target,
+        album.first.artistId,
+        onError: _log,
+      );
+      if (note.isNotEmpty) info["专辑介绍"] = note;
+      if (bio.isNotEmpty) info["艺人介绍"] = bio;
+    }
     if (!mounted) return;
-    setState(() => _lyrics = lines);
+    setState(() {
+      _lyrics = lines;
+      _trackInfo = info;
+    });
     try {
       await _audio!.playSong(host: target.host, auth: target.auth, song: song);
       await _audio!.setVolume(_volume / 100.0);
@@ -2160,6 +2200,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _lastAudioTrackId = s.trackId;
       unawaited(_refreshLmsAudioInfo(s.trackId));
       unawaited(_refreshLmsCover(s.trackId));
+      unawaited(_refreshTrackInfo(s.trackId));
     }
   }
 
@@ -2378,158 +2419,237 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     );
   }
 
-  Widget _statusRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: <Widget>[
-          SizedBox(width: 90, child: Text("$label：")),
-          Expanded(child: Text(value)),
-        ],
+  Future<void> _playSong(SongInfo song) async {
+    if (_source == "navidrome") {
+      await _playNavidromeSong(song);
+    } else {
+      await _playLmsSong(song);
+    }
+  }
+
+  Future<void> _queueSong(SongInfo song) async {
+    if (_source == "navidrome") {
+      if (!mounted) return;
+      setState(() => _songs = <SongInfo>[..._songs, song]);
+      _log("已加入播放队列：${song.title}");
+      return;
+    }
+    await _command(lmsQueueCommand(song.id), "加入队列");
+  }
+
+  Future<void> _saveSongToPlaylist(SongInfo song) async {
+    if (_source == "navidrome") {
+      final target = _navidromeTarget();
+      if (target == null) return;
+      final id = await fetchOrCreateNavidromePlaylist(
+        target,
+        onError: _log,
+      );
+      if (id.isEmpty) {
+        _log("加入播放列表失败：服务器未返回播放列表");
+        return;
+      }
+      final ok = await addNavidromeSongToPlaylist(
+        target,
+        id,
+        song.id,
+        onError: _log,
+      );
+      _log(ok ? "已加入播放列表 Sonora：${song.title}" : "加入播放列表失败");
+      return;
+    }
+    await _command(
+      lmsSavedPlaylistCommand("Sonora", song.id),
+      "加入播放列表 Sonora",
+    );
+  }
+
+  Future<void> _showSongMenu(
+    BuildContext context,
+    SongInfo song,
+    TapDownDetails details,
+  ) async {
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+        0,
+        0,
+      ),
+      items: const <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(value: "play", child: Text("立即播放")),
+        PopupMenuItem<String>(value: "queue", child: Text("添加到播放队列")),
+        PopupMenuItem<String>(value: "playlist", child: Text("添加到播放列表")),
+        PopupMenuItem<String>(value: "info", child: Text("查看曲目资料")),
+      ],
+    );
+    if (choice == null) return;
+    switch (choice) {
+      case "play":
+        await _playSong(song);
+      case "queue":
+        await _queueSong(song);
+      case "playlist":
+        await _saveSongToPlaylist(song);
+      case "info":
+        await _showSongInfo(song);
+    }
+  }
+
+  Future<void> _showSongInfo(SongInfo song) async {
+    final info = <String, String>{};
+    if (_source == "navidrome") {
+      final album = _albums.where((a) => a.name == song.album).toList();
+      if (album.isNotEmpty) {
+        final target = _navidromeTarget();
+        if (target != null) {
+          final note = await fetchNavidromeAlbumNote(
+            target,
+            album.first.id,
+            onError: _log,
+          );
+          final bio = await fetchNavidromeArtistBio(
+            target,
+            album.first.artistId,
+            onError: _log,
+          );
+          if (note.isNotEmpty) info["专辑介绍"] = note;
+          if (bio.isNotEmpty) info["艺人介绍"] = bio;
+        }
+      }
+    } else {
+      final target = _target;
+      if (target != null) {
+        info.addAll(
+          await fetchLmsTrackInfo(target, song.id, onError: _log),
+        );
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _trackInfo = info;
+      _showTrackInfo = true;
+      _tabController.animateTo(1);
+    });
+  }
+
+  Widget _songTile(
+    BuildContext context,
+    SongInfo song, {
+    required bool active,
+    required Widget leading,
+    Widget? subtitle,
+    required Widget trailing,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onSecondaryTapDown: (d) => unawaited(_showSongMenu(context, song, d)),
+      child: ListTile(
+        dense: true,
+        selected: active,
+        leading: leading,
+        title: Text(song.title),
+        subtitle: subtitle ?? Text(song.artist.isEmpty ? "未知艺人" : song.artist),
+        trailing: trailing,
+        onTap: onTap,
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 4,
-      child: Scaffold(
-        key: _scaffoldKey,
-        appBar: AppBar(
-          title: const Text("Sonora v2"),
-          bottom: const TabBar(
-            tabs: <Widget>[
-              Tab(text: "连接"),
-              Tab(text: "播放"),
-              Tab(text: "曲库"),
-              Tab(text: "升级"),
-            ],
-          ),
-          actions: <Widget>[
-            IconButton(
-              icon: const Icon(Icons.article_outlined),
-              tooltip: "日志",
-              onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-            ),
-          ],
-        ),
-        endDrawer: Drawer(
-          child: SafeArea(
-            child: Column(
+  Future<void> _setPlayMode(PlayMode mode) async {
+    if (!mounted) return;
+    setState(() => _playMode = mode);
+    _settings.playMode = mode.name;
+    unawaited(_saveSettings());
+    if (_source == "navidrome") {
+      final a = _audio;
+      if (a != null) {
+        await a.setShuffleModeEnabled(mode == PlayMode.shuffle);
+        await a.setLoopMode(
+          mode == PlayMode.loopOne
+              ? LoopMode.one
+              : mode == PlayMode.loopAll
+                  ? LoopMode.all
+                  : LoopMode.off,
+        );
+      }
+    } else {
+      final repeat = switch (mode) {
+        PlayMode.loopAll => 1,
+        PlayMode.loopOne => 2,
+        _ => 0,
+      };
+      final shuffle = mode == PlayMode.shuffle ? 1 : 0;
+      final target = _target;
+      final id = _playerId;
+      if (target != null && id != null) {
+        for (final cmd in lmsModeCommands(repeat, shuffle)) {
+          await sendLmsCommand(target, id, cmd, onError: _log);
+        }
+      }
+    }
+    _log("播放模式：${mode.label}");
+  }
+
+  Future<void> _refreshTrackInfo(String trackId) async {
+    final target = _target;
+    if (target == null || trackId.isEmpty) return;
+    final info = await fetchLmsTrackInfo(target, trackId, onError: _log);
+    final lyrics = await fetchLmsLyrics(target, trackId, onError: _log);
+    if (!mounted || _status.trackId != trackId) return;
+    setState(() {
+      _trackInfo = info;
+      _lyrics = lyrics;
+    });
+  }
+
+  Widget _playModeBar() {
+    return Wrap(
+      spacing: 8,
+      children: PlayMode.values.map((mode) {
+        final active = mode == _playMode;
+        return FilterChip(
+          label: Text(mode.iconLabel),
+          tooltip: mode.label,
+          selected: active,
+          onSelected: (_) => unawaited(_setPlayMode(mode)),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _lyricsCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
               children: <Widget>[
-                ListTile(
-                  title: const Text("运行日志"),
-                  trailing: TextButton(
-                    onPressed: () => setState(() => _logs = <String>[]),
-                    child: const Text("清空"),
-                  ),
+                const Text(
+                  "歌词",
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _logs.length,
-                    itemBuilder: (context, i) => Text(
-                      _logs.reversed.toList()[i],
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontFamily: "monospace",
-                      ),
-                    ),
-                  ),
+                const Spacer(),
+                Switch(
+                  value: _showLyrics,
+                  onChanged: (v) => setState(() => _showLyrics = v),
                 ),
               ],
             ),
-          ),
-        ),
-        body: TabBarView(
-          children: <Widget>[
-            SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  const Text(
-                    "音乐服务器",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 8),
-                  ..._serverListWidgets(),
-                  const Divider(),
-                  ..._serverDetailWidgets(),
-                  if (_busy) const LinearProgressIndicator(),
-                  const Divider(),
-                  _statusRow("LMS 版本", _lmsVersion),
-                  _statusRow("播放器数量", _playerCount < 0 ? "-" : "$_playerCount"),
-                  _statusRow("核心状态", _coreStatus),
-                  _statusRow("OpenSubsonic 状态", _navStatusText),
-                  _statusRow(
-                    "当前曲库",
-                    _activeLibrary == "lms"
-                        ? "LMS"
-                        : "OpenSubsonic · $_currentServerName",
-                  ),
-                  _statusRow(
-                    "输出设备",
-                    _coreParams.deviceName.isEmpty
-                        ? "默认"
-                        : _coreParams.deviceName,
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "服务器列表可切换/添加/修改/删除；选中一台后，下方显示它自己的配置。"
-                    "本地音质参数与输出设备只属于 LMS 服务器。",
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              ),
-            ),
-            SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    "音源：${_source == "navidrome" ? "OpenSubsonic 客户端流（$_currentServerName）" : "LMS 外部播放器"}",
-                  ),
-                  Text(
-                    _status.title.isEmpty ? "未播放" : _status.title,
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  Text(_status.artist.isEmpty ? "" : "艺人：${_status.artist}"),
-                  Text(_status.album.isEmpty ? "" : "专辑：${_status.album}"),
-                  _qualityCard(),
-                  _playbackCover(),
-                  const SizedBox(height: 12),
-                  Text(
-                    "${formatDuration(_status.position)} / ${formatDuration(_status.duration)}",
-                  ),
-                  Slider(
-                    value: _progressValue(),
-                    max: _status.duration == 0
-                        ? 1
-                        : _status.duration.toDouble(),
-                    onChanged: (v) {
-                      setState(() {
-                        _seeking = true;
-                        _seekValue = v;
-                      });
-                    },
-                    onChangeEnd: (v) {
-                      setState(() {
-                        _seeking = false;
-                        _seekValue = v;
-                      });
-                      unawaited(_seek(v.round()));
-                    },
-                  ),
-                  if (_source == "navidrome" && _lyrics.isNotEmpty) ...<Widget>[
-                    const Text(
-                      "歌词",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    SizedBox(
-                      height: 140,
-                      child: ListView.builder(
+            if (_showLyrics)
+              SizedBox(
+                height: 160,
+                child: _lyrics.isEmpty
+                    ? const Center(
+                        child: Text(
+                          "服务器未提供歌词",
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      )
+                    : ListView.builder(
                         itemCount: _lyrics.length,
                         itemBuilder: (context, i) {
                           final active = i == _currentLyricIndex();
@@ -2550,250 +2670,705 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                           );
                         },
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  Row(
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static const _infoLabels = <String, String>{
+    "artist": "艺人",
+    "album": "专辑",
+    "albumartist": "专辑艺人",
+    "trackartist": "曲目艺人",
+    "genre": "曲风",
+    "genres": "曲风",
+    "year": "年份",
+    "tracknum": "曲目号",
+    "disc": "光盘",
+    "url": "文件路径",
+    "addedTime": "加入时间",
+    "playcount": "播放次数",
+    "type": "格式",
+    "专辑介绍": "专辑介绍",
+    "艺人介绍": "艺人介绍",
+  };
+
+  Widget _trackInfoCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Text(
+                  "曲目资料",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Switch(
+                  value: _showTrackInfo,
+                  onChanged: (v) => setState(() => _showTrackInfo = v),
+                ),
+              ],
+            ),
+            if (_showTrackInfo && _trackInfo.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  "服务器未提供更多资料",
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            if (_showTrackInfo)
+              ..._trackInfo.entries.map(
+                (e) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      IconButton(
-                        icon: const Icon(Icons.skip_previous),
-                        onPressed: () => unawaited(_skip(-1)),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _status.isPlaying
-                              ? Icons.pause_circle_filled
-                              : Icons.play_circle_filled,
+                      SizedBox(
+                        width: 70,
+                        child: Text(
+                          _infoLabels[e.key] ?? e.key,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
-                        iconSize: 40,
-                        onPressed: () => unawaited(_togglePlay()),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.skip_next),
-                        onPressed: () => unawaited(_skip(1)),
-                      ),
+                      Expanded(child: Text(e.value)),
                     ],
                   ),
-                  if (_source == "navidrome" && _songs.isNotEmpty) ...<Widget>[
-                    const Divider(),
-                    Text("播放队列 ${_songs.length} 首"),
-                    SizedBox(
-                      height: 150,
-                      child: ListView.builder(
-                        itemCount: _songs.length,
-                        itemBuilder: (context, i) {
-                          final song = _songs[i];
-                          final active = song.id == _currentSong?.id;
-                          return ListTile(
-                            dense: true,
-                            selected: active,
-                            leading: Text("${i + 1}"),
-                            title: Text(song.title),
-                            subtitle: Text(
-                              song.artist.isEmpty ? "未知艺人" : song.artist,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _enterFullscreen() async {
+    try {
+      await _windowChannel.invokeMethod(
+        "setFullScreen",
+        <String, dynamic>{"enabled": true},
+      );
+    } catch (e) {
+      _log("进入全屏失败 $e");
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        fullscreenDialog: true,
+        builder: (_) => Scaffold(
+          body: SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: IconButton(
+                      icon: const Icon(Icons.close_fullscreen),
+                      tooltip: "退出大屏模式",
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                  ..._playbackWidgets(fullscreen: true),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    try {
+      await _windowChannel.invokeMethod(
+        "setFullScreen",
+        <String, dynamic>{"enabled": false},
+      );
+    } catch (_) {}
+  }
+
+  Widget _miniCover(double size) {
+    if (_source == "navidrome") {
+      final url = _currentSong?.coverUrl ?? _status.artworkUrl;
+      if (url.isNotEmpty) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            url,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) =>
+                Icon(Icons.album, size: size * 0.55),
+          ),
+        );
+      }
+    } else {
+      final cid = _status.coverId;
+      final target = _target;
+      if (cid.isNotEmpty && target != null) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image(
+            image: LmsCoverImage(target: target, coverId: cid, size: size.toInt()),
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) =>
+                Icon(Icons.album, size: size * 0.55),
+          ),
+        );
+      }
+    }
+    return Icon(Icons.album, size: size * 0.55);
+  }
+
+  Widget _miniPlayer() {
+    final media = MediaQuery.of(context).size;
+    final width = _miniCollapsed ? 58.0 : 330.0;
+    final height = _miniCollapsed ? 58.0 : 66.0;
+    final maxX = (media.width - width - 8).clamp(8.0, media.width);
+    final maxY = (media.height - 150 - height).clamp(70.0, media.height);
+    final pos = Offset(
+      _miniOffset.dx.clamp(8.0, maxX),
+      _miniOffset.dy.clamp(70.0, maxY),
+    );
+    return Positioned(
+      left: pos.dx,
+      top: pos.dy,
+      child: GestureDetector(
+        onPanUpdate: (d) {
+          setState(() => _miniOffset += d.delta);
+        },
+        child: _miniCollapsed
+            ? GestureDetector(
+                onTap: () => setState(() => _miniCollapsed = false),
+                child: Container(
+                  width: 58,
+                  height: 58,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(29),
+                    boxShadow: const <BoxShadow>[
+                      BoxShadow(color: Colors.black26, blurRadius: 8),
+                    ],
+                  ),
+                  padding: const EdgeInsets.all(3),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(26),
+                    child: _miniCover(52),
+                  ),
+                ),
+              )
+            : Container(
+                width: width,
+                height: height,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const <BoxShadow>[
+                    BoxShadow(color: Colors.black26, blurRadius: 10),
+                  ],
+                ),
+                child: Row(
+                  children: <Widget>[
+                    GestureDetector(
+                      onTap: () => _tabController.animateTo(1),
+                      child: Padding(
+                        padding: const EdgeInsets.all(7),
+                        child: _miniCover(48),
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => _tabController.animateTo(1),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: <Widget>[
+                            Text(
+                              _status.title.isEmpty ? "未播放" : _status.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13),
                             ),
-                            trailing: Text(formatDuration(song.duration)),
-                            onTap: () => unawaited(_playNavidromeSong(song)),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                  const Divider(),
-                  Text(
-                    _source == "navidrome"
-                        ? "音量（客户端流 $_volume%）"
-                        : "音量（界面值 $_volume / LMS 值 ${sliderToLms(_volume)}）",
-                  ),
-                  Slider(
-                    value: _volume.toDouble(),
-                    min: 0,
-                    max: 100,
-                    onChanged: (v) => setState(() => _volume = v.round()),
-                    onChangeEnd: (v) => unawaited(_setVolume(v.round())),
-                  ),
-                ],
-              ),
-            ),
-            SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      const Text(
-                        "曲库",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        _activeLibrary == "lms"
-                            ? "当前：$_settings.lmsName"
-                            : "当前：$_currentServerName",
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  _statusRow(
-                    "连接状态",
-                    _activeLibrary == "lms"
-                        ? "$_lmsVersion · $_coreStatus"
-                        : _navStatusText,
-                  ),
-                  const Divider(),
-                  if (_activeLibrary == "lms") ..._lmsLibraryWidgets(),
-                  if (_activeLibrary == "navidrome") ..._navLibraryWidgets(),
-                ],
-              ),
-            ),
-            SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  const Text(
-                    "主体（程序）",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  _statusRow("当前版本", _appCurrent),
-                  _statusRow("最新版本", _appLatest),
-                  if (_appNotes.isNotEmpty)
-                    Container(
-                      margin: const EdgeInsets.symmetric(vertical: 6),
-                      padding: const EdgeInsets.all(8),
-                      color: Colors.grey.shade200,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: _appNotes
-                            .map(
-                              (n) => Text(
-                                "· $n",
-                                style: const TextStyle(fontSize: 12),
+                            Text(
+                              _status.artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey,
                               ),
-                            )
-                            .toList(),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  _field("主体 zip 下载地址（留空则只检查版本）", _appZipUrl),
-                  _field("SHA256SUMS 地址（zip 同目录）", _appSumsUrl),
-                  ElevatedButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => unawaited(_verifyAppDownload()),
-                    icon: const Icon(Icons.download_outlined),
-                    label: const Text("下载并校验主体"),
-                  ),
-                  if (_appVerify != null)
-                    _statusRow(
-                      "主体校验",
-                      "${_appVerify!.ok ? '通过' : '失败'} · ${_appVerify!.stage} · ${_appVerify!.detail}",
-                    ),
-                  const SizedBox(height: 6),
-                  ElevatedButton.icon(
-                    onPressed: (_busy || _appVerify?.ok != true)
-                        ? null
-                        : () => unawaited(_installApp()),
-                    icon: const Icon(Icons.swap_horiz),
-                    label: const Text("安装替换主体"),
-                  ),
-                  if (_appInstall != null)
-                    _statusRow(
-                      "主体替换",
-                      "${_appInstall!.ok ? '成功' : '失败'} · ${_appInstall!.stage} · ${_appInstall!.detail}",
-                    ),
-                  if (_appBackups.isNotEmpty) ...<Widget>[
-                    _backupSelector(_appBackups, _appBackupId, (v) {
-                      if (mounted) setState(() => _appBackupId = v);
-                    }),
-                    ElevatedButton.icon(
-                      onPressed: _busy ? null : () => unawaited(_rollbackApp()),
-                      icon: const Icon(Icons.undo),
-                      label: const Text("回滚主体"),
-                    ),
-                  ],
-                  const Divider(),
-                  const Text(
-                    "Squeezelite 核心",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  _statusRow("当前版本", _coreCurrent),
-                  _statusRow("最新版本", _coreAsset?.displayVersion ?? "-"),
-                  _statusRow("来源", _coreAsset?.filename ?? "-"),
-                  ElevatedButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => unawaited(_verifyCoreDownload()),
-                    icon: const Icon(Icons.download_outlined),
-                    label: const Text("下载并校验核心"),
-                  ),
-                  if (_coreVerify != null)
-                    _statusRow(
-                      "核心校验",
-                      "${_coreVerify!.ok ? '通过' : '失败'} · ${_coreVerify!.stage} · ${_coreVerify!.detail}",
-                    ),
-                  const SizedBox(height: 6),
-                  ElevatedButton.icon(
-                    onPressed:
-                        (_busy ||
-                            _coreVerify?.ok != true ||
-                            _coreVerify!.binaryPath.isEmpty)
-                        ? null
-                        : () => unawaited(_installCore()),
-                    icon: const Icon(Icons.swap_horiz),
-                    label: const Text("安装替换核心"),
-                  ),
-                  if (_coreInstall != null)
-                    _statusRow(
-                      "核心替换",
-                      "${_coreInstall!.ok ? '成功' : '失败'} · ${_coreInstall!.stage} · ${_coreInstall!.detail}",
-                    ),
-                  if (_coreBackups.isNotEmpty) ...<Widget>[
-                    _backupSelector(_coreBackups, _coreBackupId, (v) {
-                      if (mounted) setState(() => _coreBackupId = v);
-                    }),
-                    ElevatedButton.icon(
-                      onPressed: _busy
-                          ? null
-                          : () => unawaited(_rollbackCore()),
-                      icon: const Icon(Icons.undo),
-                      label: const Text("回滚核心"),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: <Widget>[
-                      ElevatedButton.icon(
-                        onPressed: _busy
-                            ? null
-                            : () => unawaited(_checkUpdates()),
-                        icon: const Icon(Icons.refresh),
-                        label: const Text("重新检查版本"),
+                    IconButton(
+                      icon: Icon(
+                        _status.isPlaying
+                            ? Icons.pause
+                            : Icons.play_arrow,
                       ),
-                    ],
+                      tooltip: _status.isPlaying ? "暂停" : "播放",
+                      onPressed: () => unawaited(_togglePlay()),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.expand_more),
+                      tooltip: "折叠为小封面",
+                      onPressed: () => setState(() => _miniCollapsed = true),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _logDrawer() {
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: <Widget>[
+            ListTile(
+              title: const Text("运行日志"),
+              trailing: TextButton(
+                onPressed: () => setState(() => _logs = <String>[]),
+                child: const Text("清空"),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _logs.length,
+                itemBuilder: (context, i) => Text(
+                  _logs.reversed.toList()[i],
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontFamily: "monospace",
                   ),
-                  if (_busy) const LinearProgressIndicator(),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "替换前自动备份到 ~/Library/Application Support/Sonora/Backups；"
-                    "健康检查失败会尝试自动回滚，也可在上方手动选择备份回滚。"
-                    "主体替换需重启生效；核心替换会短暂停止核心并自动拉起。"
-                    "核心 md5 / 文件大小来自 SourceForge RSS，无需手动填写。",
-                    style: TextStyle(fontSize: 12),
-                  ),
-                ],
+                ),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _settingsScreen() {
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        key: _settingsScaffoldKey,
+        appBar: AppBar(
+          title: const Text("设置"),
+          bottom: const TabBar(
+            tabs: <Widget>[
+              Tab(text: "服务器"),
+              Tab(text: "升级"),
+            ],
+          ),
+          actions: <Widget>[
+            IconButton(
+              icon: const Icon(Icons.article_outlined),
+              tooltip: "日志",
+              onPressed: () => _settingsScaffoldKey.currentState?.openEndDrawer(),
+            ),
+          ],
+        ),
+        endDrawer: _logDrawer(),
+        body: TabBarView(
+          children: <Widget>[
+            SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _serverSettingsWidgets(),
+              ),
+            ),
+            SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _upgradeWidgets(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statusRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: <Widget>[
+          SizedBox(width: 90, child: Text("$label：")),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _playbackWidgets({bool fullscreen = false}) {
+    return <Widget>[
+      if (!fullscreen)
+        Text(
+          "音源：${_source == "navidrome" ? "OpenSubsonic 客户端流（$_currentServerName）" : "LMS 外部播放器"}",
+        ),
+      Text(
+        _status.title.isEmpty ? "未播放" : _status.title,
+        style: Theme.of(context).textTheme.headlineSmall,
+      ),
+      Text(_status.artist.isEmpty ? "" : "艺人：${_status.artist}"),
+      Text(_status.album.isEmpty ? "" : "专辑：${_status.album}"),
+      const SizedBox(height: 10),
+      _qualityCard(),
+      const SizedBox(height: 10),
+      _playbackCover(),
+      const SizedBox(height: 12),
+      Text(
+        "${formatDuration(_status.position)} / ${formatDuration(_status.duration)}",
+      ),
+      Slider(
+        value: _progressValue(),
+        max: _status.duration == 0 ? 1 : _status.duration.toDouble(),
+        onChanged: (v) {
+          setState(() {
+            _seeking = true;
+            _seekValue = v;
+          });
+        },
+        onChangeEnd: (v) {
+          setState(() {
+            _seeking = false;
+            _seekValue = v;
+          });
+          unawaited(_seek(v.round()));
+        },
+      ),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          if (!fullscreen)
+            IconButton(
+              icon: const Icon(Icons.fullscreen),
+              tooltip: "大屏模式",
+              onPressed: () => unawaited(_enterFullscreen()),
+            ),
+          IconButton(
+            icon: const Icon(Icons.skip_previous),
+            onPressed: () => unawaited(_skip(-1)),
+          ),
+          IconButton(
+            icon: Icon(
+              _status.isPlaying
+                  ? Icons.pause_circle_filled
+                  : Icons.play_circle_filled,
+            ),
+            iconSize: 40,
+            onPressed: () => unawaited(_togglePlay()),
+          ),
+          IconButton(
+            icon: const Icon(Icons.skip_next),
+            onPressed: () => unawaited(_skip(1)),
+          ),
+        ],
+      ),
+      const SizedBox(height: 4),
+      _playModeBar(),
+      const SizedBox(height: 10),
+      _lyricsCard(),
+      _trackInfoCard(),
+      if (_source == "navidrome" && _songs.isNotEmpty) ...<Widget>[
+        const Divider(),
+        Text("播放队列 ${_songs.length} 首"),
+        SizedBox(
+          height: 150,
+          child: ListView.builder(
+            itemCount: _songs.length,
+            itemBuilder: (context, i) {
+              final song = _songs[i];
+              final active = song.id == _currentSong?.id;
+              return _songTile(
+                context,
+                song,
+                active: active,
+                leading: Text("${i + 1}"),
+                trailing: Text(formatDuration(song.duration)),
+                onTap: () => unawaited(_playSong(song)),
+              );
+            },
+          ),
+        ),
+      ],
+      const Divider(),
+      Text(
+        _source == "navidrome"
+            ? "音量（客户端流 $_volume%）"
+            : "音量（界面值 $_volume / LMS 值 ${sliderToLms(_volume)}）",
+      ),
+      Slider(
+        value: _volume.toDouble(),
+        min: 0,
+        max: 100,
+        onChanged: (v) => setState(() => _volume = v.round()),
+        onChangeEnd: (v) => unawaited(_setVolume(v.round())),
+      ),
+    ];
+  }
+
+  List<Widget> _serverSettingsWidgets() {
+    return <Widget>[
+      const Text(
+        "音乐服务器",
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+      ),
+      const SizedBox(height: 8),
+      ..._serverListWidgets(),
+      const Divider(),
+      ..._serverDetailWidgets(),
+      if (_busy) const LinearProgressIndicator(),
+      const Divider(),
+      _statusRow("LMS 版本", _lmsVersion),
+      _statusRow(
+        "播放器数量",
+        _playerCount < 0 ? "-" : "$_playerCount",
+      ),
+      _statusRow("核心状态", _coreStatus),
+      _statusRow("OpenSubsonic 状态", _navStatusText),
+      _statusRow(
+        "当前曲库",
+        _activeLibrary == "lms" ? "LMS" : "OpenSubsonic · $_currentServerName",
+      ),
+      _statusRow(
+        "输出设备",
+        _coreParams.deviceName.isEmpty ? "默认" : _coreParams.deviceName,
+      ),
+      const SizedBox(height: 12),
+      const Text(
+        "服务器列表可切换/添加/修改/删除；选中一台后，下方显示它自己的配置。"
+        "本地音质参数与输出设备只属于 LMS 服务器。",
+        style: TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+    ];
+  }
+
+  List<Widget> _upgradeWidgets() {
+    return <Widget>[
+      const Text("主体（程序）", style: TextStyle(fontWeight: FontWeight.bold)),
+      _statusRow("当前版本", _appCurrent),
+      _statusRow("最新版本", _appLatest),
+      if (_appNotes.isNotEmpty)
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.all(8),
+          color: Colors.grey.shade200,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: _appNotes
+                .map(
+                  (n) => Text("· $n", style: const TextStyle(fontSize: 12)),
+                )
+                .toList(),
+          ),
+        ),
+      _field("主体 zip 下载地址（留空则只检查版本）", _appZipUrl),
+      _field("SHA256SUMS 地址（zip 同目录）", _appSumsUrl),
+      ElevatedButton.icon(
+        onPressed: _busy ? null : () => unawaited(_verifyAppDownload()),
+        icon: const Icon(Icons.download_outlined),
+        label: const Text("下载并校验主体"),
+      ),
+      if (_appVerify != null)
+        _statusRow(
+          "主体校验",
+          "${_appVerify!.ok ? '通过' : '失败'} · ${_appVerify!.stage} · ${_appVerify!.detail}",
+        ),
+      const SizedBox(height: 6),
+      ElevatedButton.icon(
+        onPressed: (_busy || _appVerify?.ok != true)
+            ? null
+            : () => unawaited(_installApp()),
+        icon: const Icon(Icons.swap_horiz),
+        label: const Text("安装替换主体"),
+      ),
+      if (_appInstall != null)
+        _statusRow(
+          "主体替换",
+          "${_appInstall!.ok ? '成功' : '失败'} · ${_appInstall!.stage} · ${_appInstall!.detail}",
+        ),
+      if (_appBackups.isNotEmpty) ...<Widget>[
+        _backupSelector(_appBackups, _appBackupId, (v) {
+          if (mounted) setState(() => _appBackupId = v);
+        }),
+        ElevatedButton.icon(
+          onPressed: _busy ? null : () => unawaited(_rollbackApp()),
+          icon: const Icon(Icons.undo),
+          label: const Text("回滚主体"),
+        ),
+      ],
+      const Divider(),
+      const Text("Squeezelite 核心", style: TextStyle(fontWeight: FontWeight.bold)),
+      _statusRow("当前版本", _coreCurrent),
+      _statusRow("最新版本", _coreAsset?.displayVersion ?? "-"),
+      _statusRow("来源", _coreAsset?.filename ?? "-"),
+      ElevatedButton.icon(
+        onPressed: _busy ? null : () => unawaited(_verifyCoreDownload()),
+        icon: const Icon(Icons.download_outlined),
+        label: const Text("下载并校验核心"),
+      ),
+      if (_coreVerify != null)
+        _statusRow(
+          "核心校验",
+          "${_coreVerify!.ok ? '通过' : '失败'} · ${_coreVerify!.stage} · ${_coreVerify!.detail}",
+        ),
+      const SizedBox(height: 6),
+      ElevatedButton.icon(
+        onPressed: (_busy ||
+                _coreVerify?.ok != true ||
+                _coreVerify!.binaryPath.isEmpty)
+            ? null
+            : () => unawaited(_installCore()),
+        icon: const Icon(Icons.swap_horiz),
+        label: const Text("安装替换核心"),
+      ),
+      if (_coreInstall != null)
+        _statusRow(
+          "核心替换",
+          "${_coreInstall!.ok ? '成功' : '失败'} · ${_coreInstall!.stage} · ${_coreInstall!.detail}",
+        ),
+      if (_coreBackups.isNotEmpty) ...<Widget>[
+        _backupSelector(_coreBackups, _coreBackupId, (v) {
+          if (mounted) setState(() => _coreBackupId = v);
+        }),
+        ElevatedButton.icon(
+          onPressed: _busy ? null : () => unawaited(_rollbackCore()),
+          icon: const Icon(Icons.undo),
+          label: const Text("回滚核心"),
+        ),
+      ],
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        children: <Widget>[
+          ElevatedButton.icon(
+            onPressed: _busy ? null : () => unawaited(_checkUpdates()),
+            icon: const Icon(Icons.refresh),
+            label: const Text("重新检查版本"),
+          ),
+        ],
+      ),
+      if (_busy) const LinearProgressIndicator(),
+      const SizedBox(height: 12),
+      const Text(
+        "替换前自动备份到 ~/Library/Application Support/Sonora/Backups；"
+        "健康检查失败会尝试自动回滚，也可在上方手动选择备份回滚。"
+        "主体替换需重启生效；核心替换会短暂停止核心并自动拉起。"
+        "核心 md5 / 文件大小来自 SourceForge RSS，无需手动填写。",
+        style: TextStyle(fontSize: 12),
+      ),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      key: _scaffoldKey,
+      appBar: AppBar(
+        title: const Text("Sonora v2"),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const <Widget>[
+            Tab(text: "曲库"),
+            Tab(text: "播放"),
+          ],
+        ),
+        actions: <Widget>[
+          IconButton(
+            icon: const Icon(Icons.article_outlined),
+            tooltip: "日志",
+            onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: "设置（服务器与升级）",
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => _settingsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
+      endDrawer: _logDrawer(),
+      body: Stack(
+        children: <Widget>[
+          TabBarView(
+            controller: _tabController,
+            children: <Widget>[
+              SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        const Text(
+                          "曲库",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _activeLibrary == "lms"
+                              ? "当前：$_settings.lmsName"
+                              : "当前：$_currentServerName",
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    _statusRow(
+                      "连接状态",
+                      _activeLibrary == "lms"
+                          ? "$_lmsVersion · $_coreStatus"
+                          : _navStatusText,
+                    ),
+                    if (_busy) const LinearProgressIndicator(),
+                    const Divider(),
+                    if (_activeLibrary == "lms") ..._lmsLibraryWidgets(),
+                    if (_activeLibrary == "navidrome") ..._navLibraryWidgets(),
+                  ],
+                ),
+              ),
+              SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: _playbackWidgets(),
+                ),
+              ),
+            ],
+          ),
+          if (_tabController.index != 1) _miniPlayer(),
+        ],
       ),
     );
   }

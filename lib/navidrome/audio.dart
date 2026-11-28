@@ -56,6 +56,9 @@ class NavidromeAudio {
   Future<void> pause() => _player.pause();
   Future<void> seek(Duration position) => _player.seek(position);
   Future<void> setVolume(double volume) => _player.setVolume(volume.clamp(0.0, 1.0));
+  Future<void> setLoopMode(LoopMode mode) => _player.setLoopMode(mode);
+  Future<void> setShuffleModeEnabled(bool enabled) =>
+      _player.setShuffleModeEnabled(enabled);
   Future<void> stop() => _player.stop();
   Future<void> dispose() => _player.dispose();
 

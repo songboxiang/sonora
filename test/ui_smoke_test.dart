@@ -1,4 +1,4 @@
-// UI 层冒烟测试：验证服务器管理页、纯曲库页、播放效果面板与升级页真实渲染。
+// UI 层冒烟测试：主页只保留曲库/播放，服务器与升级收进设置页。
 import "dart:io";
 
 import "package:flutter_test/flutter_test.dart";
@@ -6,11 +6,9 @@ import "package:sonora/core/settings.dart";
 import "package:sonora/main.dart";
 
 void main() {
- late Directory testHome;
+  late Directory testHome;
 
   setUp(() {
-    // Widget tests must not trigger real LMS/OpenSubsonic network or core start,
-    // nor touch the developer's persisted settings.
     sonoraAutoRestore = false;
     testHome = Directory.systemTemp.createTempSync("sonora-ui-test");
     sonoraSettingsPathOverride = "${testHome.path}/settings.json";
@@ -26,31 +24,35 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
   }
 
-  // initState schedules a device scan with an 8s timeout timer; advance the
-  // fake clock past it so no timer is left pending at test teardown.
   Future<void> settle(WidgetTester tester) async {
     await tester.pump(const Duration(seconds: 9));
     await tester.pumpAndSettle();
   }
 
-  testWidgets("四个页签与音乐服务器列表渲染", (tester) async {
+  testWidgets("主页只有曲库和播放，设置入口在右上角", (tester) async {
     await pumpApp(tester);
     expect(find.text("Sonora v2"), findsOneWidget);
-    for (final label in ["连接", "播放", "曲库", "升级"]) {
-      expect(find.text(label), findsWidgets);
-    }
+    expect(find.text("曲库"), findsWidgets);
+    expect(find.text("播放"), findsWidgets);
+    expect(find.text("连接"), findsNothing);
+    expect(find.text("升级"), findsNothing);
+    expect(find.byTooltip("设置（服务器与升级）"), findsOneWidget);
+    expect(find.byTooltip("折叠为小封面"), findsOneWidget);
+    await settle(tester);
+  });
+
+  testWidgets("设置页包含服务器配置与升级", (tester) async {
+    await pumpApp(tester);
+    await tester.tap(find.byTooltip("设置（服务器与升级）"));
+    await tester.pumpAndSettle();
+    expect(find.text("设置"), findsWidgets);
+    expect(find.text("服务器"), findsWidgets);
+    expect(find.text("升级"), findsWidgets);
     expect(find.text("音乐服务器"), findsOneWidget);
     expect(find.text("我的 LMS 服务器"), findsWidgets);
     expect(find.text("我的音乐服务器"), findsWidgets);
     expect(find.text("添加服务器"), findsOneWidget);
-    expect(find.text("切换"), findsWidgets);
-    expect(find.text("修改"), findsWidgets);
-    await settle(tester);
-  });
 
-  testWidgets("LMS 服务器下直接展示设备扫描、命名与参数配置", (tester) async {
-    await pumpApp(tester);
-    // 显式选中 LMS，避免依赖用户上次持久化的轨道。
     await tester.tap(find.text("修改").first);
     await tester.pumpAndSettle();
     expect(find.text("服务器配置"), findsOneWidget);
@@ -58,21 +60,26 @@ void main() {
     expect(find.textContaining("设备显示名称"), findsOneWidget);
     expect(find.text("参数配置"), findsOneWidget);
     expect(find.text("连接并自动拉起核心"), findsOneWidget);
-    expect(find.text("停止核心"), findsOneWidget);
     expect(find.text("保存配置"), findsOneWidget);
+
+    await tester.tap(find.text("升级").last);
+    await tester.pumpAndSettle();
+    for (final label in [
+      "下载并校验主体",
+      "安装替换主体",
+      "下载并校验核心",
+      "安装替换核心",
+    ]) {
+      expect(find.text(label), findsOneWidget);
+    }
     await settle(tester);
   });
 
   testWidgets("曲库页只保留曲库功能与连接状态", (tester) async {
     await pumpApp(tester);
-    await tester.tap(find.text("曲库").first);
-    await tester.pumpAndSettle();
-    expect(find.text("曲库"), findsWidgets);
     expect(find.textContaining("连接状态"), findsOneWidget);
     expect(find.text("加载专辑"), findsOneWidget);
     expect(find.text("曲库轨道"), findsNothing);
-    // The active library may be LMS or OpenSubsonic depending on persisted
-    // settings; both render the pure library page without the old track card.
     expect(
       find.text("搜索歌曲 / 专辑").evaluate().isNotEmpty ||
           find.textContaining("LMS 专辑").evaluate().isNotEmpty,
@@ -81,7 +88,7 @@ void main() {
     await settle(tester);
   });
 
-  testWidgets("播放页渲染当前播放效果面板", (tester) async {
+  testWidgets("播放页渲染音质、歌词、资料与模式开关", (tester) async {
     await pumpApp(tester);
     await tester.tap(find.text("播放").first);
     await tester.pumpAndSettle();
@@ -89,16 +96,21 @@ void main() {
     for (final label in ["输出模式", "音质", "无损", "输出"]) {
       expect(find.textContaining("$label："), findsWidgets);
     }
+    expect(find.text("歌词"), findsOneWidget);
+    expect(find.text("曲目资料"), findsOneWidget);
+    for (final label in ["列表", "循环", "单曲", "随机"]) {
+      expect(find.text(label), findsOneWidget);
+    }
+    expect(find.byTooltip("大屏模式"), findsOneWidget);
+    expect(find.byTooltip("折叠为小封面"), findsNothing);
     await settle(tester);
   });
 
-  testWidgets("升级页渲染主体与核心下载、安装按钮", (tester) async {
+  testWidgets("迷你播放器可折叠为小封面", (tester) async {
     await pumpApp(tester);
-    await tester.tap(find.text("升级").first);
+    await tester.tap(find.byTooltip("折叠为小封面"));
     await tester.pumpAndSettle();
-    for (final label in ["下载并校验主体", "安装替换主体", "下载并校验核心", "安装替换核心"]) {
-      expect(find.text(label), findsOneWidget);
-    }
+    expect(find.byTooltip("折叠为小封面"), findsNothing);
     await settle(tester);
   });
 }

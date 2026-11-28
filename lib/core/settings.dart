@@ -309,6 +309,7 @@ class AppSettings {
     List<OpenSubsonicServer>? servers,
     this.activeServerId = "default",
     this.activeLibrary = "lms",
+    this.playMode = "sequential",
     this.appZipUrl = "",
     this.appSumsUrl = "",
     this.coreParams = const CoreParams(),
@@ -332,6 +333,7 @@ class AppSettings {
   List<OpenSubsonicServer> servers;
   String activeServerId;
   String activeLibrary;
+  String playMode;
   String appZipUrl;
   String appSumsUrl;
   CoreParams coreParams;
@@ -394,6 +396,7 @@ class AppSettings {
     "navPassword": navPassword,
     "navCredsPath": navCredsPath,
     "activeLibrary": activeLibrary,
+    "playMode": playMode,
     "appZipUrl": appZipUrl,
     "appSumsUrl": appSumsUrl,
     "coreParams": coreParams.toJson(),
@@ -442,6 +445,7 @@ class AppSettings {
       servers: servers,
       activeServerId: activeServerId,
       activeLibrary: (m["activeLibrary"] ?? "lms").toString(),
+      playMode: (m["playMode"] ?? "sequential").toString(),
       appZipUrl: (m["appZipUrl"] ?? "").toString(),
       appSumsUrl: (m["appSumsUrl"] ?? "").toString(),
       coreParams: m["coreParams"] is Map<String, dynamic>

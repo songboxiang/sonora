@@ -316,6 +316,21 @@ Map<String, String> lmsRepresentativeTracks(List<SongInfo> tracks) {
   return out;
 }
 
+/// Append a library track to the current play queue.
+List<String> lmsQueueCommand(String trackId) =>
+    <String>["playlist", "add", "track_id:$trackId"];
+
+/// Append a library track to a saved server-side playlist.
+List<String> lmsSavedPlaylistCommand(String playlistName, String trackId) =>
+    <String>["playlist", "add", playlistName, "track_id:$trackId"];
+
+/// repeat: 0 off, 1 all, 2 single. shuffle: 0 off, 1 on.
+List<List<String>> lmsModeCommands(int repeat, int shuffle) =>
+    <List<String>>[
+      <String>["playlist", "repeat", repeat.toString()],
+      <String>["playlist", "shuffle", shuffle.toString()],
+    ];
+
 /// LMS does not implement a seek player command; it is silently ignored.
 /// The supported absolute jump is time SECONDS (verified on a live server).
 List<String> lmsSeekCommand(int seconds) => <String>["time", seconds.toString()];

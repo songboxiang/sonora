@@ -126,6 +126,21 @@ void main() {
     expect(lmsSeekCommand(0), equals(<String>["time", "0"]));
   });
 
+  test("queue, playlist and mode commands use supported LMS CLI", () {
+    expect(lmsQueueCommand("4425"), equals(<String>["playlist", "add", "track_id:4425"]));
+    expect(
+      lmsSavedPlaylistCommand("Sonora", "4425"),
+      equals(<String>["playlist", "add", "Sonora", "track_id:4425"]),
+    );
+    expect(
+      lmsModeCommands(2, 1),
+      equals(<List<String>>[
+        <String>["playlist", "repeat", "2"],
+        <String>["playlist", "shuffle", "1"],
+      ]),
+    );
+  });
+
   test("representative tracks are one distinct id per album", () {
     final tracks = parseLmsTracks(
       j(

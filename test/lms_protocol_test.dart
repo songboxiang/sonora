@@ -1,5 +1,6 @@
 import "dart:convert";
 import "package:flutter_test/flutter_test.dart";
+import "package:sonora/core/services.dart";
 import "package:sonora/lms/protocol.dart";
 import "package:sonora/core/models.dart";
 
@@ -88,6 +89,16 @@ void main() {
     );
     expect(s.position, 200);
     expect(s.duration, 464);
+  });
+
+  test("plain LRC lyrics parse into timestamped lines", () {
+    final lines = parsePlainLyrics(
+      "[00:12.50]第一句\n[01:03.20]第二句\n无时间第三句",
+    );
+    expect(lines.length, 2);
+    expect(lines.first.timeMs, 12500);
+    expect(lines.first.text, "第一句");
+    expect(lines.last.timeMs, 63200);
   });
 
   test("version comparison handles mixed formats", () {

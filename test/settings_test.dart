@@ -150,4 +150,11 @@ void main() {
     });
     expect(decoded.activeServer?.credsPath, defaultNavCredsPath);
   });
+
+  test("播放模式 序列化往返保留", () {
+    final a = AppSettings(playMode: "loopOne");
+    final b = AppSettings.fromJson(a.toJson());
+    expect(b.playMode, "loopOne");
+    expect(AppSettings.fromJson(<String, dynamic>{}).playMode, "sequential");
+  });
 }

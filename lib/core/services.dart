@@ -545,3 +545,145 @@ Future<PlaybackStatus> fetchNavidromePlayQueue(
     return const PlaybackStatus();
   }
 }
+
+/// LMS exposes rich track metadata only through songinfo tags. Lowercase
+/// letters are the readable fields (a=artist, l=album, g=genre, y=year,
+/// t=track, i=disc, u=path); uppercase A/D/O add album artist, added time and
+/// play count. Returned keys are kept verbatim so the UI can label them.
+Future<Map<String, String>> fetchLmsTrackInfo(
+  LmsTarget target,
+  String trackId, {
+  void Function(String)? onError,
+}) async {
+  if (trackId.isEmpty) return const <String, String>{};
+  final root = await lmsRpc(target, [
+    "",
+    ["songinfo", 0, 100, "track_id:$trackId", "tags:algyAtidOu"],
+  ], quiet: true, onError: onError);
+  if (root == null) return const <String, String>{};
+  final loop = lmsResult(root)["songinfo_loop"];
+  if (loop is! List) return const <String, String>{};
+  final out = <String, String>{};
+  for (final item in loop) {
+    if (item is! Map) continue;
+    for (final entry in item.entries) {
+      final v = entry.value?.toString() ?? "";
+      if (v.isNotEmpty) out[entry.key.toString()] = v;
+    }
+  }
+  return out;
+}
+
+/// Parse unsynchronised or LRC lyrics returned by a server as plain text.
+List<LyricLine> parsePlainLyrics(String raw) {
+  if (raw.trim().isEmpty) return const <LyricLine>[];
+  final out = <LyricLine>[];
+  final stamped = RegExp(r"\[(\d{1,3}):(\d{2}(?:[.:]\d+)?)\](.*)");
+  var hasStamp = false;
+  for (final line in raw.split(RegExp(r"\r?\n"))) {
+    final m = stamped.firstMatch(line);
+    if (m == null) {
+      if (!hasStamp && line.trim().isNotEmpty) {
+        out.add(LyricLine(timeMs: 0, text: line.trim()));
+      }
+      continue;
+    }
+    hasStamp = true;
+    final min = int.tryParse(m.group(1) ?? "") ?? 0;
+    final sec = double.tryParse((m.group(2) ?? "").replaceFirst(":", ".")) ?? 0;
+    final text = (m.group(3) ?? "").trim();
+    if (text.isNotEmpty) {
+      out.add(LyricLine(timeMs: ((min * 60 + sec) * 1000).round(), text: text));
+    }
+  }
+  out.sort((a, b) => a.timeMs.compareTo(b.timeMs));
+  return out;
+}
+
+/// LMS lyricsLive is usually provided by a plugin; songinfo LYRICS is the
+/// portable fallback. Missing lyrics simply produce an empty list.
+Future<List<LyricLine>> fetchLmsLyrics(
+  LmsTarget target,
+  String trackId, {
+  void Function(String)? onError,
+}) async {
+  if (trackId.isEmpty) return const <LyricLine>[];
+  final root = await lmsRpc(target, [
+    "",
+    ["songinfo", 0, 100, "track_id:$trackId", "tags:L"],
+  ], quiet: true, onError: onError);
+  if (root == null) return const <LyricLine>[];
+  final loop = lmsResult(root)["songinfo_loop"];
+  if (loop is! List) return const <LyricLine>[];
+  for (final item in loop) {
+    if (item is! Map) continue;
+    final raw = item["lyrics"] ?? item["LYRICS"] ?? item["comment"];
+    if (raw != null && raw.toString().trim().isNotEmpty) {
+      return parsePlainLyrics(raw.toString());
+    }
+  }
+  return const <LyricLine>[];
+}
+
+/// Find a Subsonic playlist by name, creating it when absent. Sonora uses a
+/// single default playlist so the context menu works on a fresh server.
+Future<String> fetchOrCreateNavidromePlaylist(
+  NavidromeTarget target, {
+  String name = "Sonora",
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(queryParameters: target.query()).query;
+    final root = parseJson(
+      await getText("${target.baseUrl}/getPlaylists?$q"),
+    );
+    final resp = root["subsonic-response"];
+    if (resp is Map) {
+      final lists = resp["playlists"];
+      final items = lists is Map ? lists["playlist"] : null;
+      if (items is List) {
+        for (final item in items) {
+          if (item is Map && item["name"] == name) {
+            return item["id"]?.toString() ?? "";
+          }
+        }
+      }
+    }
+    final param = Uri(queryParameters: target.query({"name": name})).query;
+    final created = parseJson(
+      await getText("${target.baseUrl}/createPlaylist?$param"),
+    );
+    final pl = created["subsonic-response"];
+    if (pl is Map && pl["playlist"] is Map) {
+      return pl["playlist"]["id"]?.toString() ?? "";
+    }
+    return "";
+  } catch (e) {
+    onError?.call("播放列表 ${e.toString().split('\n').first}");
+    return "";
+  }
+}
+
+Future<bool> addNavidromeSongToPlaylist(
+  NavidromeTarget target,
+  String playlistId,
+  String songId, {
+  void Function(String)? onError,
+}) async {
+  if (playlistId.isEmpty || songId.isEmpty) return false;
+  try {
+    final q = Uri(
+      queryParameters: target.query({
+        "playlistId": playlistId,
+        "songIdToAdd": songId,
+      }),
+    ).query;
+    final root = parseJson(
+      await getText("${target.baseUrl}/updatePlaylist?$q"),
+    );
+    return (root["subsonic-response"]?["status"] ?? "").toString() == "ok";
+  } catch (e) {
+    onError?.call("加入播放列表 ${e.toString().split('\n').first}");
+    return false;
+  }
+}

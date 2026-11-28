@@ -150,6 +150,31 @@ class AudioInfo {
   }
 }
 
+/// 播放模式：顺序 / 列表循环 / 单曲循环 / 随机。
+enum PlayMode { sequential, loopAll, loopOne, shuffle }
+
+extension PlayModeLabel on PlayMode {
+  String get label => switch (this) {
+        PlayMode.sequential => "顺序播放",
+        PlayMode.loopAll => "列表循环",
+        PlayMode.loopOne => "单曲循环",
+        PlayMode.shuffle => "随机播放",
+      };
+  String get iconLabel => switch (this) {
+        PlayMode.sequential => "列表",
+        PlayMode.loopAll => "循环",
+        PlayMode.loopOne => "单曲",
+        PlayMode.shuffle => "随机",
+      };
+}
+
+PlayMode playModeFromString(String raw) => switch (raw) {
+      "loopAll" => PlayMode.loopAll,
+      "loopOne" => PlayMode.loopOne,
+      "shuffle" => PlayMode.shuffle,
+      _ => PlayMode.sequential,
+    };
+
 class PlaybackStatus {
   final String mode;
   final String title;
