@@ -310,6 +310,8 @@ class AppSettings {
     this.activeServerId = "default",
     this.activeLibrary = "lms",
     this.playMode = "sequential",
+    this.libraryView = "grid",
+    this.librarySort = "name",
     this.appZipUrl = "",
     this.appSumsUrl = "",
     this.coreParams = const CoreParams(),
@@ -334,6 +336,8 @@ class AppSettings {
   String activeServerId;
   String activeLibrary;
   String playMode;
+  String libraryView;
+  String librarySort;
   String appZipUrl;
   String appSumsUrl;
   CoreParams coreParams;
@@ -397,6 +401,8 @@ class AppSettings {
     "navCredsPath": navCredsPath,
     "activeLibrary": activeLibrary,
     "playMode": playMode,
+    "libraryView": libraryView,
+    "librarySort": librarySort,
     "appZipUrl": appZipUrl,
     "appSumsUrl": appSumsUrl,
     "coreParams": coreParams.toJson(),
@@ -446,6 +452,8 @@ class AppSettings {
       activeServerId: activeServerId,
       activeLibrary: (m["activeLibrary"] ?? "lms").toString(),
       playMode: (m["playMode"] ?? "sequential").toString(),
+      libraryView: (m["libraryView"] ?? "grid").toString(),
+      librarySort: (m["librarySort"] ?? "name").toString(),
       appZipUrl: (m["appZipUrl"] ?? "").toString(),
       appSumsUrl: (m["appSumsUrl"] ?? "").toString(),
       coreParams: m["coreParams"] is Map<String, dynamic>

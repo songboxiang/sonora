@@ -79,6 +79,9 @@ void main() {
     await pumpApp(tester);
     expect(find.textContaining("连接状态"), findsOneWidget);
     expect(find.text("加载专辑"), findsOneWidget);
+    expect(find.byTooltip("大图标"), findsOneWidget);
+    expect(find.byTooltip("列表"), findsOneWidget);
+    expect(find.text("排序"), findsOneWidget);
     expect(find.text("曲库轨道"), findsNothing);
     expect(
       find.text("搜索歌曲 / 专辑").evaluate().isNotEmpty ||
@@ -98,8 +101,8 @@ void main() {
     }
     expect(find.text("歌词"), findsOneWidget);
     expect(find.text("曲目资料"), findsOneWidget);
-    for (final label in ["列表", "循环", "单曲", "随机"]) {
-      expect(find.text(label), findsOneWidget);
+    for (final tip in ["顺序播放", "列表循环", "单曲循环", "随机播放"]) {
+      expect(find.byTooltip(tip), findsWidgets);
     }
     expect(find.byTooltip("大屏模式"), findsOneWidget);
     expect(find.byTooltip("折叠为小封面"), findsNothing);
