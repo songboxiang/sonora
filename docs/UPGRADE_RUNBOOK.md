@@ -1,6 +1,6 @@
 # Sonora v2 升级与回滚操作手册（一页）
 
-适用：macOS v2 分支、2.3.0+5。两条可升级轨：**程序主体** `/Applications/Sonora.app`、**Squeezelite 核心** `~/Library/Application Support/Sonora/Core/squeezelite`。LMS / Navidrome 只提示手动升级。
+适用：macOS v2 分支、2.3.1+6。两条可升级轨：**程序主体** `/Applications/Sonora.app`、**Squeezelite 核心** `~/Library/Application Support/Sonora/Core/squeezelite`。LMS / Navidrome 只提示手动升级。
 
 ## 0. 升级前确认
 
@@ -15,7 +15,7 @@
 
 ```bash
 cd ~/Projects/sonora_v2/dist && python3 -m http.server 8000
-# zip:  http://127.0.0.1:8000/Sonora-2.3.0.zip
+# zip:  http://127.0.0.1:8000/Sonora-2.3.1.zip
 # sums: http://127.0.0.1:8000/SHA256SUMS
 ```
 

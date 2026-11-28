@@ -58,7 +58,7 @@ class _SonoraHomeState extends State<SonoraHome>
 
   /// Mini player sits above every page except the full player.
   bool _miniCollapsed = false;
-  Offset _miniOffset = const Offset(16, 80);
+  Offset _miniOffset = const Offset(16, 60);
 
   /// Playback extras.
   PlayMode _playMode = PlayMode.sequential;
@@ -136,6 +136,12 @@ class _SonoraHomeState extends State<SonoraHome>
   String? _expandedKey;
   List<SongInfo> _expandedTracks = <SongInfo>[];
   bool _loadingTracks = false;
+
+  /// Album drill-down replaces the album grid inside the library tab.
+  AlbumInfo? _detailAlbum;
+
+  /// Right-hand playback panel: lyrics (default) or track information.
+  String _playerPanel = "lyrics";
   NavidromeAudio? _audio;
   bool _audioSubscribed = false;
   bool _autoAdvancing = false;
@@ -1005,6 +1011,8 @@ class _SonoraHomeState extends State<SonoraHome>
               _groupArtist = null;
               _groupGenre = null;
               _groupYear = null;
+              _letterFilter = "";
+              _detailAlbum = null;
             });
           },
         );
@@ -1045,24 +1053,45 @@ class _SonoraHomeState extends State<SonoraHome>
   /// already-loaded catalogue for LMS (its server-side filters are unreliable).
   List<Widget> _libraryIndexWidgets() {
     final source = _activeLibrary == "lms" ? _lmsAlbums : _albums;
+    List<Widget> letterHeader(Set<String> available) => <Widget>[
+          _letterBar(available),
+          if (_letterFilter.isNotEmpty)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => setState(() => _letterFilter = ""),
+                child: const Text("清除首字母"),
+              ),
+            ),
+        ];
     if (_libraryGrouping == LibraryGrouping.artist) {
       final artists = _activeLibrary == "lms"
           ? groupAlbumsByArtist(source)
           : (_artistIndex.isNotEmpty
               ? _artistIndex
               : groupAlbumsByArtist(source));
-      return artists.map((a) {
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundImage:
-                a.coverUrl.isEmpty ? null : NetworkImage(a.coverUrl),
-            child: a.coverUrl.isEmpty ? const Icon(Icons.person) : null,
-          ),
-          title: Text(a.name.isEmpty ? "未知艺人" : a.name),
-          subtitle: a.albumCount > 0 ? Text("${a.albumCount} 张专辑") : null,
-          onTap: () => setState(() => _groupArtist = a.name),
-        );
-      }).toList();
+      final available = artists.map((a) => _initialOf(a.name)).toSet();
+      final shown = _letterFilter.isEmpty
+          ? artists
+          : artists.where((a) => _initialOf(a.name) == _letterFilter).toList();
+      return <Widget>[
+        ...letterHeader(available),
+        ...shown.map((a) {
+          return ListTile(
+            leading: CircleAvatar(
+              backgroundImage:
+                  a.coverUrl.isEmpty ? null : NetworkImage(a.coverUrl),
+              child: a.coverUrl.isEmpty ? const Icon(Icons.person) : null,
+            ),
+            title: Text(a.name.isEmpty ? "未知艺人" : a.name),
+            subtitle: a.albumCount > 0 ? Text("${a.albumCount} 张专辑") : null,
+            onTap: () => setState(() {
+              _groupArtist = a.name;
+              _letterFilter = "";
+            }),
+          );
+        }),
+      ];
     }
     if (_libraryGrouping == LibraryGrouping.genre) {
       final genres = _activeLibrary == "lms"
@@ -1070,19 +1099,29 @@ class _SonoraHomeState extends State<SonoraHome>
           : (_genreIndex.isNotEmpty
               ? _genreIndex
               : groupAlbumsByGenre(source));
-      return genres.map((g) {
-        return ListTile(
-          leading: const CircleAvatar(child: Icon(Icons.category)),
-          title: Text(g.name.isEmpty ? "未知流派" : g.name),
-          subtitle: Text(
-            [
-              if (g.albumCount > 0) "${g.albumCount} 张专辑",
-              if (g.songCount > 0) "${g.songCount} 首",
-            ].join(" · "),
-          ),
-          onTap: () => setState(() => _groupGenre = g.name),
-        );
-      }).toList();
+      final available = genres.map((g) => _initialOf(g.name)).toSet();
+      final shown = _letterFilter.isEmpty
+          ? genres
+          : genres.where((g) => _initialOf(g.name) == _letterFilter).toList();
+      return <Widget>[
+        ...letterHeader(available),
+        ...shown.map((g) {
+          return ListTile(
+            leading: const CircleAvatar(child: Icon(Icons.category)),
+            title: Text(g.name.isEmpty ? "未知流派" : g.name),
+            subtitle: Text(
+              [
+                if (g.albumCount > 0) "${g.albumCount} 张专辑",
+                if (g.songCount > 0) "${g.songCount} 首",
+              ].join(" · "),
+            ),
+            onTap: () => setState(() {
+              _groupGenre = g.name;
+              _letterFilter = "";
+            }),
+          );
+        }),
+      ];
     }
     final years = groupAlbumsByYear(source).keys.toList()..sort();
     return years.map((y) {
@@ -1090,16 +1129,74 @@ class _SonoraHomeState extends State<SonoraHome>
         leading: const CircleAvatar(child: Icon(Icons.calendar_today)),
         title: Text("$y"),
         subtitle: Text("${groupAlbumsByYear(source)[y]?.length ?? 0} 张专辑"),
-        onTap: () => setState(() => _groupYear = y),
+        onTap: () => setState(() {
+          _groupYear = y;
+          _letterFilter = "";
+        }),
       );
     }).toList();
   }
 
-  String _albumInitial(AlbumInfo album) {
-    final name = album.name.trim();
-    if (name.isEmpty) return "#";
-    final first = name.substring(0, 1).toUpperCase();
+  String _initialOf(String name) {
+    final v = name.trim();
+    if (v.isEmpty) return "#";
+    final first = v.substring(0, 1).toUpperCase();
     return RegExp(r"^[A-Z]$").hasMatch(first) ? first : "#";
+  }
+
+  String _albumInitial(AlbumInfo album) => _initialOf(album.name);
+
+  /// Letters with no matching entry are dimmed and inert; letters that do
+  /// have entries stay bright so the index is scannable at a glance.
+  Widget _letterBar(Set<String> available) {
+    const letters = <String>[
+      "#", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+      "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ];
+    return SonoraGlassPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      radius: 10,
+      child: SizedBox(
+        height: 26,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: letters.length,
+          itemBuilder: (context, i) {
+            final letter = letters[i];
+            final active = letter == _letterFilter;
+            final present = available.contains(letter);
+            return SizedBox(
+              width: 24,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  backgroundColor:
+                      active ? SonoraColors.primary : Colors.transparent,
+                ),
+                onPressed: present
+                    ? () => setState(
+                          () => _letterFilter = active ? "" : letter,
+                        )
+                    : null,
+                child: Text(
+                  letter,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: present ? FontWeight.w600 : FontWeight.normal,
+                    color: active
+                        ? SonoraColors.background
+                        : (present
+                            ? SonoraColors.text
+                            : const Color(0x3A6E8984)),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
   }
 
   List<AlbumInfo> _filteredAlbums(List<AlbumInfo> source) {
@@ -1131,12 +1228,12 @@ class _SonoraHomeState extends State<SonoraHome>
   }
 
   Widget _libraryToolbar() {
-    const letters = <String>[
-      "#", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-      "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-    ];
+    final available =
+        (_activeLibrary == "lms" ? _lmsAlbums : _albums)
+            .map((a) => _albumInitial(a))
+            .toSet();
     return SonoraGlassPanel(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1149,11 +1246,14 @@ class _SonoraHomeState extends State<SonoraHome>
               IconButton(
                 icon: Icon(
                   Icons.grid_view,
+                  size: 18,
                   color: _libraryView == "grid"
                       ? SonoraColors.primary
                       : SonoraColors.text3,
                 ),
                 tooltip: "大图标",
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(width: 30, height: 30),
                 onPressed: () {
                   setState(() => _libraryView = "grid");
                   _settings.libraryView = "grid";
@@ -1163,11 +1263,14 @@ class _SonoraHomeState extends State<SonoraHome>
               IconButton(
                 icon: Icon(
                   Icons.list,
+                  size: 18,
                   color: _libraryView == "list"
                       ? SonoraColors.primary
                       : SonoraColors.text3,
                 ),
                 tooltip: "列表",
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(width: 30, height: 30),
                 onPressed: () {
                   setState(() => _libraryView = "list");
                   _settings.libraryView = "list";
@@ -1206,41 +1309,8 @@ class _SonoraHomeState extends State<SonoraHome>
                 ),
             ],
           ),
-          if (_libraryGrouping == LibraryGrouping.all)
-            SizedBox(
-              height: 30,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: letters.length,
-                itemBuilder: (context, i) {
-                  final letter = letters[i];
-                  final active = letter == _letterFilter;
-                  return SizedBox(
-                    width: 28,
-                    child: TextButton(
-                      style: TextButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        backgroundColor: active
-                            ? SonoraColors.primary
-                            : Colors.transparent,
-                      ),
-                      onPressed: () => setState(
-                        () => _letterFilter = active ? "" : letter,
-                      ),
-                      child: Text(
-                        letter,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: active
-                              ? SonoraColors.background
-                              : SonoraColors.text2,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
+          const SizedBox(height: 4),
+          _letterBar(available),
         ],
       ),
     );
@@ -1312,8 +1382,23 @@ class _SonoraHomeState extends State<SonoraHome>
     });
   }
 
-  Future<void> _toggleAlbum(AlbumInfo album) async {
-    await _toggleExpansion("album:${album.id}", () => _albumTracks(album));
+  Future<void> _openAlbum(AlbumInfo album) async {
+    final key = "album:${album.id}";
+    setState(() {
+      _detailAlbum = album;
+      _expandedKey = null;
+      _expandedTracks = const <SongInfo>[];
+      _loadingTracks = true;
+    });
+    final songs = await _albumTracks(album);
+    if (!mounted) return;
+    setState(() {
+      _expandedKey = key;
+      _expandedTracks = songs;
+      _loadingTracks = false;
+      _songs = songs;
+      _source = _activeLibrary == "lms" ? "lms" : "navidrome";
+    });
     if (_activeLibrary == "navidrome") {
       final target = _navidromeTarget();
       if (target == null) return;
@@ -1329,6 +1414,16 @@ class _SonoraHomeState extends State<SonoraHome>
         _artistBio = bio;
       });
     }
+  }
+
+  void _closeAlbumDetail() {
+    setState(() {
+      _detailAlbum = null;
+      _expandedKey = null;
+      _expandedTracks = const <SongInfo>[];
+      _albumNote = "";
+      _artistBio = "";
+    });
   }
 
   Future<void> _toggleGroup(List<AlbumInfo> albums) {
@@ -1391,9 +1486,105 @@ class _SonoraHomeState extends State<SonoraHome>
     return album.coverUrl.isEmpty ? null : NetworkImage(album.coverUrl);
   }
 
+  Widget _detailCover(AlbumInfo album) {
+    final provider = _albumCoverProvider(album, 180);
+    return Container(
+      width: 72,
+      height: 72,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: SonoraColors.surface2,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0x33FFFFFF)),
+      ),
+      child: provider == null
+          ? const Icon(Icons.album, color: SonoraColors.text3, size: 30)
+          : Image(
+              image: provider,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.album,
+                color: SonoraColors.text3,
+                size: 30,
+              ),
+            ),
+    );
+  }
+
+  List<Widget> _albumDetailWidgets() {
+    final album = _detailAlbum!;
+    return <Widget>[
+      Row(
+        children: <Widget>[
+          TextButton.icon(
+            onPressed: _closeAlbumDetail,
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: const Text("返回曲库", style: TextStyle(fontSize: 12)),
+          ),
+          const Spacer(),
+          const Text(
+            "专辑详情",
+            style: TextStyle(fontSize: 11, color: SonoraColors.text3),
+          ),
+        ],
+      ),
+      const SizedBox(height: 6),
+      SonoraGlassPanel(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            _detailCover(album),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    album.name,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: SonoraColors.text,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    album.artist.isEmpty ? "未知艺人" : album.artist,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: SonoraColors.text2,
+                    ),
+                  ),
+                  if (album.metaText.isNotEmpty)
+                    Text(
+                      album.metaText,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: SonoraColors.text3,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      if (_albumNote.isNotEmpty) ...<Widget>[
+        const SizedBox(height: 8),
+        _infoCard("专辑简介", _albumNote),
+      ],
+      if (_artistBio.isNotEmpty) ...<Widget>[
+        const SizedBox(height: 8),
+        _infoCard("艺人简介", _artistBio),
+      ],
+      const SizedBox(height: 10),
+      if (_loadingTracks) const LinearProgressIndicator(),
+      _expandedTrackList("album:${album.id}"),
+    ];
+  }
+
   List<Widget> _albumCards(List<AlbumInfo> albums) {
     if (_libraryView == "grid") {
-      final expanded = _expandedKey.toString().startsWith("album:");
       return <Widget>[
         GridView.builder(
           shrinkWrap: true,
@@ -1407,12 +1598,11 @@ class _SonoraHomeState extends State<SonoraHome>
           itemCount: albums.length,
           itemBuilder: (context, i) {
             final a = albums[i];
-            final key = "album:${a.id}";
-            final selected = _expandedKey == key;
+            final selected = _detailAlbum?.id == a.id;
             final provider = _albumCoverProvider(a, 240);
             return InkWell(
               borderRadius: BorderRadius.circular(16),
-              onTap: () => unawaited(_toggleAlbum(a)),
+              onTap: () => unawaited(_openAlbum(a)),
               child: SonoraGlassPanel(
                 padding: const EdgeInsets.all(8),
                 child: Column(
@@ -1432,8 +1622,11 @@ class _SonoraHomeState extends State<SonoraHome>
                           ),
                         ),
                         child: provider == null
-                            ? const Icon(Icons.album,
-                                color: SonoraColors.text3, size: 34)
+                            ? const Icon(
+                                Icons.album,
+                                color: SonoraColors.text3,
+                                size: 34,
+                              )
                             : Image(
                                 image: provider,
                                 fit: BoxFit.cover,
@@ -1471,31 +1664,20 @@ class _SonoraHomeState extends State<SonoraHome>
             );
           },
         ),
-        if (expanded && _expandedKey != null)
-          _expandedTrackList(_expandedKey!),
       ];
     }
     return albums.map((a) {
-      final key = "album:${a.id}";
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          ListTile(
-            leading: _albumCover(a),
-            title: Text(a.name),
-            subtitle: Text(
-              [
-                a.artist.isEmpty ? "未知艺人" : a.artist,
-                if (a.metaText.isNotEmpty) a.metaText,
-              ].join(" · "),
-            ),
-            trailing: Icon(
-              _expandedKey == key ? Icons.expand_less : Icons.expand_more,
-            ),
-            onTap: () => unawaited(_toggleAlbum(a)),
-          ),
-          _expandedTrackList(key),
-        ],
+      return ListTile(
+        leading: _albumCover(a),
+        title: Text(a.name),
+        subtitle: Text(
+          [
+            a.artist.isEmpty ? "未知艺人" : a.artist,
+            if (a.metaText.isNotEmpty) a.metaText,
+          ].join(" · "),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => unawaited(_openAlbum(a)),
       );
     }).toList();
   }
@@ -1638,6 +1820,7 @@ class _SonoraHomeState extends State<SonoraHome>
   }
 
   List<Widget> _lmsLibraryWidgets() {
+    if (_detailAlbum != null) return _albumDetailWidgets();
     final showIndex = _libraryGrouping != LibraryGrouping.all && !_hasGroupValue;
     if (showIndex) {
       return <Widget>[
@@ -1685,6 +1868,7 @@ class _SonoraHomeState extends State<SonoraHome>
   }
 
   List<Widget> _navLibraryWidgets() {
+    if (_detailAlbum != null) return _albumDetailWidgets();
     final showIndex = _libraryGrouping != LibraryGrouping.all && !_hasGroupValue;
     if (showIndex) {
       return <Widget>[
@@ -2682,43 +2866,59 @@ class _SonoraHomeState extends State<SonoraHome>
               ? "允许 macOS 重采样（-a ${_coreParams.latencyMs}:1）"
               : "完美码率直通（-a ${_coreParams.latencyMs}:0）")
         : "客户端流解码（不经 squeezelite）";
-    final modeColor = isLms
-        ? (_coreParams.allowResample
-              ? Colors.orange.shade700
-              : Colors.green.shade700)
-        : Colors.indigo;
+    final audio = _audioInfo;
     final device = isLms
         ? (_coreParams.deviceName.isNotEmpty
               ? _coreParams.deviceName
               : _coreParams.device)
         : "just_audio · $_currentServerName";
-    final audio = _audioInfo;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    Widget row(String label, String value) => Row(
           children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(Icons.high_quality_outlined, color: modeColor, size: 18),
-                const SizedBox(width: 6),
-                const Text(
-                  "当前播放效果",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
+            SizedBox(
+              width: 54,
+              child: Text(
+                "$label：",
+                style: const TextStyle(fontSize: 10, color: SonoraColors.text3),
+              ),
             ),
-            const SizedBox(height: 6),
-            _statusRow("输出模式", modeText),
-            _statusRow("音质", audio == null ? "-" : audio.summary),
-            _statusRow(
-              "无损",
-              audio == null ? "-" : (audio.lossless ? "是" : "否 / 未知"),
+            Expanded(
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 10, color: SonoraColors.text2),
+              ),
             ),
-            _statusRow("输出", device.isEmpty ? "-" : device),
           ],
-        ),
+        );
+    return SonoraGlassPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      radius: 10,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(Icons.high_quality_outlined,
+                  size: 12, color: SonoraColors.primary),
+              SizedBox(width: 5),
+              Text(
+                "当前播放效果",
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: SonoraColors.text2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          row("输出模式", modeText),
+          row("音质", audio == null ? "-" : audio.summary),
+          row("无损", audio == null ? "-" : (audio.lossless ? "是" : "否 / 未知")),
+          row("输出", device.isEmpty ? "-" : device),
+        ],
       ),
     );
   }
@@ -2963,88 +3163,66 @@ class _SonoraHomeState extends State<SonoraHome>
     );
   }
 
-  Widget _lyricsCard() {
-    return SonoraGlassPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              const Icon(Icons.lyrics, size: 16, color: SonoraColors.primary),
-              const SizedBox(width: 6),
-              const Text(
-                "歌词",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: SonoraColors.text,
-                ),
-              ),
-              if (_lyricSource.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: Text(
-                    "· $_lyricSource",
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: SonoraColors.text3,
-                    ),
+  Widget _lyricsCard({bool fullscreen = false}) {
+    if (!_showLyrics) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          "歌词已隐藏",
+          style: TextStyle(fontSize: 12, color: SonoraColors.text3),
+        ),
+      );
+    }
+    if (_lyrics.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          "暂未获取到歌词",
+          style: TextStyle(fontSize: 12, color: SonoraColors.text3),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (_lyricSource.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              "来源 · $_lyricSource",
+              style: const TextStyle(fontSize: 9, color: SonoraColors.text3),
+            ),
+          ),
+        SizedBox(
+          height: fullscreen ? 380 : 230,
+          child: ListView.builder(
+            controller: fullscreen ? _lyricScroll : null,
+            itemCount: _lyrics.length,
+            itemBuilder: (context, i) {
+              final active = i == _currentLyricIndex();
+              return Padding(
+                padding: EdgeInsets.symmetric(vertical: fullscreen ? 8 : 3),
+                child: Text(
+                  _lyrics[i].text,
+                  style: TextStyle(
+                    fontSize: active
+                        ? (fullscreen ? 28 : 14)
+                        : (fullscreen ? 19 : 12),
+                    height: fullscreen ? 1.35 : 1.3,
+                    color: active ? SonoraColors.primary : SonoraColors.text2,
+                    fontWeight: active ? FontWeight.bold : FontWeight.normal,
+                    shadows: active
+                        ? const <Shadow>[
+                            Shadow(color: Color(0x997CC7A6), blurRadius: 18),
+                          ]
+                        : null,
                   ),
                 ),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.refresh, size: 16),
-                tooltip: "重新获取歌词",
-                color: SonoraColors.text2,
-                onPressed: () => unawaited(
-                  _refreshTrackInfo(_status.trackId),
-                ),
-              ),
-              Switch(
-                value: _showLyrics,
-                onChanged: (v) => setState(() => _showLyrics = v),
-              ),
-            ],
+              );
+            },
           ),
-          if (_showLyrics)
-            SizedBox(
-              height: 190,
-              child: _lyrics.isEmpty
-                  ? const Center(
-                      child: Text(
-                        "暂未获取到歌词",
-                        style: TextStyle(fontSize: 12, color: SonoraColors.text3),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _lyrics.length,
-                      itemBuilder: (context, i) {
-                        final active = i == _currentLyricIndex();
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 3),
-                          child: Text(
-                            _lyrics[i].text,
-                            style: TextStyle(
-                              fontSize: active ? 15 : 13,
-                              color: active
-                                  ? SonoraColors.primary
-                                  : SonoraColors.text2,
-                              fontWeight: active ? FontWeight.bold : FontWeight.normal,
-                              shadows: active
-                                  ? const <Shadow>[
-                                      Shadow(
-                                        color: Color(0x997CC7A6),
-                                        blurRadius: 14,
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -3066,127 +3244,55 @@ class _SonoraHomeState extends State<SonoraHome>
     "艺人介绍": "艺人介绍",
   };
 
-  Widget _trackInfoCard() {
-    return SonoraGlassPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              const Icon(Icons.info_outline, size: 16, color: SonoraColors.gold),
-              const SizedBox(width: 6),
-              const Text(
-                "曲目资料",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: SonoraColors.text,
-                ),
-              ),
-              if (_trackInfo.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
+  Widget _trackInfoCard({bool fullscreen = false}) {
+    if (_trackInfo.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          "服务器未提供更多资料",
+          style: TextStyle(fontSize: 12, color: SonoraColors.text3),
+        ),
+      );
+    }
+    return SizedBox(
+      height: fullscreen ? 380 : 230,
+      child: ListView(
+        children: _trackInfo.entries.map((e) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                SizedBox(
+                  width: 68,
                   child: Text(
-                    "· 服务端 ${_trackInfo.length} 项",
-                    style: const TextStyle(
-                      fontSize: 10,
+                    _infoLabels[e.key] ?? e.key,
+                    style: TextStyle(
+                      fontSize: fullscreen ? 13 : 11,
                       color: SonoraColors.text3,
                     ),
                   ),
                 ),
-              const Spacer(),
-              Switch(
-                value: _showTrackInfo,
-                onChanged: (v) => setState(() => _showTrackInfo = v),
-              ),
-            ],
-          ),
-          if (_showTrackInfo && _trackInfo.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                "服务器未提供更多资料",
-                style: TextStyle(fontSize: 12, color: SonoraColors.text3),
-              ),
-            ),
-          if (_showTrackInfo)
-            ..._trackInfo.entries.map(
-              (e) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    SizedBox(
-                      width: 72,
-                      child: Text(
-                        _infoLabels[e.key] ?? e.key,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: SonoraColors.text3,
-                        ),
-                      ),
+                Expanded(
+                  child: Text(
+                    e.value,
+                    style: TextStyle(
+                      fontSize: fullscreen ? 13 : 11,
+                      color: SonoraColors.text,
                     ),
-                    Expanded(
-                      child: Text(
-                        e.value,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: SonoraColors.text,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+              ],
             ),
-        ],
+          );
+        }).toList(),
       ),
-    );
-  }
-
-  Widget _fullscreenLyrics() {
-    if (!_showLyrics) {
-      return const Center(
-        child: Text("歌词已隐藏", style: TextStyle(color: SonoraColors.text3)),
-      );
-    }
-    if (_lyrics.isEmpty) {
-      return const Center(
-        child: Text(
-          "暂未获取到歌词",
-          style: TextStyle(color: SonoraColors.text3, fontSize: 14),
-        ),
-      );
-    }
-    return ListView.builder(
-      controller: _lyricScroll,
-      padding: const EdgeInsets.symmetric(vertical: 24),
-      itemCount: _lyrics.length,
-      itemBuilder: (context, i) {
-        final active = i == _currentLyricIndex();
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-            _lyrics[i].text,
-            style: TextStyle(
-              fontSize: active ? 30 : 19,
-              height: 1.35,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w400,
-              color: active ? Colors.white : const Color(0x47FFFFFF),
-              shadows: active
-                  ? const <Shadow>[
-                      Shadow(color: Color(0xAA7CC7A6), blurRadius: 34),
-                    ]
-                  : null,
-            ),
-          ),
-        );
-      },
     );
   }
 
   Widget _fullscreenBody() {
     final media = MediaQuery.of(context).size;
-    final coverSide = (media.width * 0.28).clamp(210.0, 360.0);
+    final coverSide = (media.width * 0.26).clamp(200.0, 330.0);
     return Stack(
       children: <Widget>[
         SonoraBackdrop(cover: _coverProvider(600)),
@@ -3194,32 +3300,11 @@ class _SonoraHomeState extends State<SonoraHome>
           child: Column(
             children: <Widget>[
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
                 child: Row(
                   children: <Widget>[
                     _playModeBar(compact: true),
                     const Spacer(),
-                    IconButton(
-                      icon: Icon(
-                        _showLyrics ? Icons.lyrics : Icons.lyrics_outlined,
-                        color: _showLyrics
-                            ? SonoraColors.primary
-                            : SonoraColors.text3,
-                      ),
-                      tooltip: "显示/隐藏歌词",
-                      onPressed: () => setState(() => _showLyrics = !_showLyrics),
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        _showTrackInfo ? Icons.info : Icons.info_outlined,
-                        color: _showTrackInfo
-                            ? SonoraColors.primary
-                            : SonoraColors.text3,
-                      ),
-                      tooltip: "显示/隐藏曲目资料",
-                      onPressed: () =>
-                          setState(() => _showTrackInfo = !_showTrackInfo),
-                    ),
                     IconButton(
                       icon: const Icon(Icons.close_fullscreen),
                       color: SonoraColors.text,
@@ -3232,46 +3317,50 @@ class _SonoraHomeState extends State<SonoraHome>
               Expanded(
                 child: Row(
                   children: <Widget>[
-                    SizedBox(width: 32),
+                    const SizedBox(width: 28),
                     SizedBox(
                       width: coverSide,
                       child: Center(child: _playbackCover(side: coverSide)),
                     ),
-                    const SizedBox(width: 36),
+                    const SizedBox(width: 28),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          const SizedBox(height: 18),
+                          const SizedBox(height: 12),
                           Text(
                             _status.title.isEmpty ? "未播放" : _status.title,
                             maxLines: 2,
                             style: const TextStyle(
-                              fontSize: 42,
+                              fontSize: 36,
                               fontWeight: FontWeight.w700,
                               letterSpacing: -1,
                               color: Colors.white,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 6),
                           Text(
-                            _status.artist.isEmpty ? "" : "艺人 · ${_status.artist}",
+                            _status.artist.isEmpty
+                                ? ""
+                                : "艺人 · ${_status.artist}",
                             style: const TextStyle(
-                              fontSize: 16,
+                              fontSize: 15,
                               color: SonoraColors.text2,
                             ),
                           ),
                           Text(
-                            _status.album.isEmpty ? "" : _status.album.toUpperCase(),
+                            _status.album.isEmpty
+                                ? ""
+                                : _status.album.toUpperCase(),
                             style: const TextStyle(
-                              fontSize: 11,
+                              fontSize: 10,
                               letterSpacing: 1.4,
                               color: SonoraColors.text3,
                             ),
                           ),
                           if (_showTrackInfo && _trackInfo.isNotEmpty)
                             Padding(
-                              padding: const EdgeInsets.only(top: 8),
+                              padding: const EdgeInsets.only(top: 6),
                               child: Text(
                                 _trackInfo.entries
                                     .take(4)
@@ -3285,8 +3374,9 @@ class _SonoraHomeState extends State<SonoraHome>
                                 ),
                               ),
                             ),
+                          const SizedBox(height: 12),
                           const Divider(color: SonoraColors.line),
-                          Expanded(child: _fullscreenLyrics()),
+                          Expanded(child: _playerSidePanel(fullscreen: true)),
                         ],
                       ),
                     ),
@@ -3295,7 +3385,8 @@ class _SonoraHomeState extends State<SonoraHome>
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 48, vertical: 10),
                 child: Column(
                   children: <Widget>[
                     _progressSlider(),
@@ -3306,7 +3397,7 @@ class _SonoraHomeState extends State<SonoraHome>
                         color: SonoraColors.text2,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     _transportRow(compact: true),
                   ],
                 ),
@@ -3579,91 +3670,49 @@ class _SonoraHomeState extends State<SonoraHome>
           Expanded(
             child: Text(
               "音源：${_source == "navidrome" ? "OpenSubsonic 客户端流（$_currentServerName）" : "LMS 外部播放器"}",
-              style: const TextStyle(fontSize: 12, color: SonoraColors.text3),
+              style: const TextStyle(fontSize: 11, color: SonoraColors.text3),
             ),
           ),
           if (!fullscreen)
-            IconButton(
-              icon: const Icon(Icons.fullscreen),
-              color: SonoraColors.primary,
-              tooltip: "大屏模式",
-              onPressed: () => unawaited(_enterFullscreen()),
+            SizedBox(
+              width: 30,
+              height: 30,
+              child: IconButton(
+                icon: const Icon(Icons.fullscreen, size: 18),
+                color: SonoraColors.primary,
+                tooltip: "大屏模式",
+                padding: EdgeInsets.zero,
+                onPressed: () => unawaited(_enterFullscreen()),
+              ),
             ),
         ],
-      ),
-      const SizedBox(height: 14),
-      Center(child: _playbackCover(side: fullscreen ? 280 : 220)),
-      const SizedBox(height: 18),
-      Text(
-        _status.title.isEmpty ? "未播放" : _status.title,
-        style: const TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
-          color: Colors.white,
-        ),
-      ),
-      const SizedBox(height: 5),
-      Text(
-        _status.artist.isEmpty ? "" : "艺人 · ${_status.artist}",
-        style: const TextStyle(fontSize: 15, color: SonoraColors.text2),
-      ),
-      Text(
-        _status.album.isEmpty ? "" : _status.album.toUpperCase(),
-        style: const TextStyle(
-          fontSize: 10,
-          letterSpacing: 1.6,
-          color: SonoraColors.text3,
-        ),
-      ),
-      const SizedBox(height: 14),
-      _progressSlider(),
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(
-          children: <Widget>[
-            Text(
-              formatDuration(_status.position),
-              style: const TextStyle(fontSize: 11, color: SonoraColors.text2),
-            ),
-            const Spacer(),
-            Text(
-              formatDuration(_status.duration),
-              style: const TextStyle(fontSize: 11, color: SonoraColors.text2),
-            ),
-          ],
-        ),
       ),
       const SizedBox(height: 8),
-      _transportRow(),
-      const SizedBox(height: 6),
-      Center(child: _playModeBar()),
-      const SizedBox(height: 12),
-      Row(
-        children: <Widget>[
-          const Icon(Icons.volume_down, size: 18, color: SonoraColors.text3),
-          Expanded(
-            child: Slider(
-              value: _volume.toDouble(),
-              min: 0,
-              max: 100,
-              onChanged: (v) => setState(() => _volume = v.round()),
-              onChangeEnd: (v) => unawaited(_setVolume(v.round())),
-            ),
-          ),
-          Text(
-            "$_volume%",
-            style: const TextStyle(fontSize: 11, color: SonoraColors.text3),
-          ),
-        ],
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final left = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: _playerControls(fullscreen: fullscreen),
+          );
+          final right = _playerSidePanel(fullscreen: fullscreen);
+          if (constraints.maxWidth < 740) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[left, const SizedBox(height: 12), right],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(flex: 3, child: left),
+              const SizedBox(width: 16),
+              SizedBox(width: 330, child: right),
+            ],
+          );
+        },
       ),
-      _qualityCard(),
-      const SizedBox(height: 12),
-      const Divider(color: SonoraColors.line),
-      _lyricsCard(),
-      const SizedBox(height: 10),
-      _trackInfoCard(),
       if (_source == "navidrome" && _songs.isNotEmpty) ...<Widget>[
+        const SizedBox(height: 12),
         const Divider(color: SonoraColors.line),
         SonoraGlassPanel(
           child: Column(
@@ -3699,6 +3748,142 @@ class _SonoraHomeState extends State<SonoraHome>
         ),
       ],
     ];
+  }
+
+  List<Widget> _playerControls({bool fullscreen = false}) {
+    return <Widget>[
+      Center(child: _playbackCover(side: fullscreen ? 280 : 200)),
+      const SizedBox(height: 12),
+      Text(
+        _status.title.isEmpty ? "未播放" : _status.title,
+        style: const TextStyle(
+          fontSize: 22,
+          fontWeight: FontWeight.w700,
+          letterSpacing: -0.5,
+          color: Colors.white,
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        _status.artist.isEmpty ? "" : "艺人 · ${_status.artist}",
+        style: const TextStyle(fontSize: 13, color: SonoraColors.text2),
+      ),
+      Text(
+        _status.album.isEmpty ? "" : _status.album.toUpperCase(),
+        style: const TextStyle(
+          fontSize: 10,
+          letterSpacing: 1.6,
+          color: SonoraColors.text3,
+        ),
+      ),
+      const SizedBox(height: 10),
+      _progressSlider(),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: <Widget>[
+            Text(
+              formatDuration(_status.position),
+              style: const TextStyle(fontSize: 11, color: SonoraColors.text2),
+            ),
+            const Spacer(),
+            Text(
+              formatDuration(_status.duration),
+              style: const TextStyle(fontSize: 11, color: SonoraColors.text2),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 4),
+      _transportRow(),
+      const SizedBox(height: 4),
+      Center(child: _playModeBar()),
+      const SizedBox(height: 8),
+      Row(
+        children: <Widget>[
+          const Icon(Icons.volume_down, size: 16, color: SonoraColors.text3),
+          Expanded(
+            child: Slider(
+              value: _volume.toDouble(),
+              min: 0,
+              max: 100,
+              onChanged: (v) => setState(() => _volume = v.round()),
+              onChangeEnd: (v) => unawaited(_setVolume(v.round())),
+            ),
+          ),
+          Text(
+            "$_volume%",
+            style: const TextStyle(fontSize: 11, color: SonoraColors.text3),
+          ),
+        ],
+      ),
+      _qualityCard(),
+    ];
+  }
+
+  Widget _panelTab(String label, bool active, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? SonoraColors.primary : const Color(0x14FFFFFF),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+            color: active ? SonoraColors.background : SonoraColors.text2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _playerSidePanel({bool fullscreen = false}) {
+    return SonoraGlassPanel(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              _panelTab("歌词", _playerPanel == "lyrics", () {
+                setState(() {
+                  _playerPanel = "lyrics";
+                  _showLyrics = true;
+                });
+              }),
+              const SizedBox(width: 6),
+              _panelTab("曲目资料", _playerPanel == "info", () {
+                setState(() {
+                  _playerPanel = "info";
+                  _showTrackInfo = true;
+                });
+              }),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 15),
+                tooltip: "重新获取歌词与资料",
+                color: SonoraColors.text2,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 28, height: 28),
+                onPressed: () => unawaited(_refreshTrackInfo(_status.trackId)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_playerPanel == "lyrics")
+            _lyricsCard(fullscreen: fullscreen)
+          else
+            _trackInfoCard(fullscreen: fullscreen),
+        ],
+      ),
+    );
   }
 
   List<Widget> _serverSettingsWidgets() {
@@ -3859,29 +4044,48 @@ class _SonoraHomeState extends State<SonoraHome>
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        title: const Text("Sonora v2"),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const <Widget>[
-            Tab(text: "曲库"),
-            Tab(text: "播放"),
-          ],
+        toolbarHeight: 42,
+        title: const Text(
+          "Sonora v2",
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(32),
+          child: TabBar(
+            controller: _tabController,
+            labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            unselectedLabelStyle: const TextStyle(fontSize: 12),
+            indicatorWeight: 2,
+            tabs: const <Widget>[
+              Tab(text: "曲库"),
+              Tab(text: "播放"),
+            ],
+          ),
         ),
         actions: <Widget>[
-          IconButton(
-            icon: const Icon(Icons.article_outlined),
-            tooltip: "日志",
-            onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+          SizedBox(
+            width: 34,
+            child: IconButton(
+              icon: const Icon(Icons.article_outlined, size: 17),
+              tooltip: "日志",
+              padding: EdgeInsets.zero,
+              onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: "设置（服务器与升级）",
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => _settingsScreen()),
-              );
-            },
+          SizedBox(
+            width: 34,
+            child: IconButton(
+              icon: const Icon(Icons.settings_outlined, size: 17),
+              tooltip: "设置（服务器与升级）",
+              padding: EdgeInsets.zero,
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => _settingsScreen()),
+                );
+              },
+            ),
           ),
+          const SizedBox(width: 4),
         ],
       ),
       endDrawer: _logDrawer(),
@@ -3891,40 +4095,32 @@ class _SonoraHomeState extends State<SonoraHome>
             controller: _tabController,
             children: <Widget>[
               SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Row(
                       children: <Widget>[
-                        const Text(
-                          "曲库",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+                        Expanded(
+                          child: Text(
+                            "连接状态：${_activeLibrary == "lms" ? "$_lmsVersion · $_coreStatus · $_settings.lmsName" : "$_navStatusText · $_currentServerName"}",
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: SonoraColors.text3,
+                            ),
                           ),
                         ),
-                        const Spacer(),
-                        Text(
-                          _activeLibrary == "lms"
-                              ? "当前：$_settings.lmsName"
-                              : "当前：$_currentServerName",
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
+                        if (_busy)
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
-                        ),
                       ],
                     ),
                     const SizedBox(height: 6),
-                    _statusRow(
-                      "连接状态",
-                      _activeLibrary == "lms"
-                          ? "$_lmsVersion · $_coreStatus"
-                          : _navStatusText,
-                    ),
-                    if (_busy) const LinearProgressIndicator(),
-                    const Divider(),
                     if (_activeLibrary == "lms") ..._lmsLibraryWidgets(),
                     if (_activeLibrary == "navidrome") ..._navLibraryWidgets(),
                   ],
