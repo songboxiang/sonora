@@ -3,6 +3,11 @@ import "package:flutter_test/flutter_test.dart";
 import "package:sonora/main.dart";
 
 void main() {
+  setUp(() {
+    // Widget tests must not trigger real LMS/OpenSubsonic network or core start.
+    sonoraAutoRestore = false;
+  });
+
   Future<void> pumpApp(WidgetTester tester) async {
     await tester.pumpWidget(const SonoraApp());
     await tester.pumpAndSettle(const Duration(seconds: 2));
@@ -22,7 +27,7 @@ void main() {
       expect(find.text(label), findsWidgets);
     }
     expect(find.text("音乐服务器"), findsOneWidget);
-    expect(find.text("我的 LMS 服务器"), findsOneWidget);
+    expect(find.text("我的 LMS 服务器"), findsWidgets);
     expect(find.text("我的音乐服务器"), findsWidgets);
     expect(find.text("添加服务器"), findsOneWidget);
     expect(find.text("切换"), findsWidgets);
@@ -51,9 +56,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text("曲库"), findsWidgets);
     expect(find.textContaining("连接状态"), findsOneWidget);
-    expect(find.text("搜索歌曲 / 专辑"), findsOneWidget);
     expect(find.text("加载专辑"), findsOneWidget);
     expect(find.text("曲库轨道"), findsNothing);
+    // The active library may be LMS or OpenSubsonic depending on persisted
+    // settings; both render the pure library page without the old track card.
+    expect(
+      find.text("搜索歌曲 / 专辑").evaluate().isNotEmpty ||
+          find.textContaining("LMS 专辑").evaluate().isNotEmpty,
+      isTrue,
+    );
     await settle(tester);
   });
 

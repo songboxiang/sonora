@@ -9,11 +9,17 @@ import "core/services.dart";
 import "core/installer.dart";
 import "core/settings.dart";
 import "core/updates.dart";
+import "lms/cover.dart";
 import "lms/library.dart";
 import "lms/protocol.dart";
 import "navidrome/audio.dart";
 import "navidrome/subsonic.dart";
 import "squeezelite/core_runner.dart";
+
+/// Startup auto-restore can be disabled in widget tests to avoid real network
+/// and CoreRunner side effects. Production always keeps the default true.
+bool sonoraAutoRestore = true;
+bool sonoraSkipCoverEnrichment = false;
 
 void main() => runApp(const SonoraApp());
 
@@ -74,8 +80,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   List<OutputDevice> _deviceOptions = <OutputDevice>[];
   String _activeLibrary = "lms";
   List<AlbumInfo> _lmsAlbums = <AlbumInfo>[];
-  List<SongInfo> _lmsSongs = <SongInfo>[];
-  AlbumInfo? _selectedLmsAlbum;
   List<LyricLine> _lyrics = <LyricLine>[];
   String _albumNote = "";
   String _artistBio = "";
@@ -101,6 +105,12 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   int? _groupYear;
   List<ArtistInfo> _artistIndex = <ArtistInfo>[];
   List<GenreInfo> _genreIndex = <GenreInfo>[];
+
+  /// Inline expansion state for the library page. The key identifies an
+  /// album or a hierarchy group; tracks render directly under their header.
+  String? _expandedKey;
+  List<SongInfo> _expandedTracks = <SongInfo>[];
+  bool _loadingTracks = false;
   NavidromeAudio? _audio;
   bool _audioSubscribed = false;
   bool _autoAdvancing = false;
@@ -159,12 +169,23 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       unawaited(_scanOutputDevices());
     });
     WidgetsBinding.instance.addObserver(this);
-    // Headless verification hook: SONORA_AUTO_CONNECT=1 makes the real UI
-    // exercise the same connect path a user clicks, without GUI automation.
+    final autoLmsPlay = Platform.environment["SONORA_LMS_VERIFY"] == "1";
     final autoConnect = Platform.environment["SONORA_AUTO_CONNECT"] == "1";
     final autoPlay = Platform.environment["SONORA_AUTO_PLAY"] == "1";
     final autoUpdate = Platform.environment["SONORA_AUTO_UPDATE"] == "1";
-    if (autoConnect || autoPlay || autoUpdate) {
+
+    // Restore the last active library automatically: LMS needs a live player
+    // (target + playerId) before play works; OpenSubsonic needs its album list.
+    if (sonoraAutoRestore &&
+        !autoConnect &&
+        !autoPlay &&
+        !autoUpdate &&
+        !autoLmsPlay) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_autoRestoreLibrary());
+      });
+    }
+    if (autoConnect || autoPlay || autoUpdate || autoLmsPlay) {
       // ignore: avoid_print
       print("SONORA headless hooks armed");
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -197,6 +218,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
               }
             }
           }());
+        } else if (autoLmsPlay) {
+          unawaited(_verifyLmsAutoPlay());
         } else {
           unawaited(autoConnect ? _connect() : _autoPlayNavidrome());
         }
@@ -250,7 +273,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         "${DateTime.now().toIso8601String().substring(11, 19)} $line";
     if (Platform.environment["SONORA_AUTO_CONNECT"] == "1" ||
         Platform.environment["SONORA_AUTO_PLAY"] == "1" ||
-        Platform.environment["SONORA_AUTO_UPDATE"] == "1") {
+        Platform.environment["SONORA_AUTO_UPDATE"] == "1" ||
+        Platform.environment["SONORA_LMS_VERIFY"] == "1") {
       // ignore: avoid_print
       print(stamped);
     }
@@ -1048,6 +1072,189 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
   }
 
+  /// Fetch tracks for one album on the active library.
+  Future<List<SongInfo>> _albumTracks(AlbumInfo album) async {
+    if (_activeLibrary == "lms") {
+      final target = _target;
+      if (target == null) return const <SongInfo>[];
+      return fetchLmsTracks(target, album: album.name, onError: _log);
+    }
+    final target = _navidromeTarget();
+    if (target == null) return const <SongInfo>[];
+    return fetchNavidromeAlbum(target, album.id, onError: _log);
+  }
+
+  /// Fetch tracks for a whole artist/genre/year group. LMS filters one cached
+  /// full-track response locally; OpenSubsonic reads a bounded set of albums
+  /// so a 30-album genre does not issue 30 requests at once.
+  Future<List<SongInfo>> _groupTracks(List<AlbumInfo> albums) async {
+    if (albums.isEmpty) return const <SongInfo>[];
+    if (_activeLibrary == "lms") {
+      final target = _target;
+      if (target == null) return const <SongInfo>[];
+      final all = await fetchLmsTracks(target, onError: _log);
+      return all.where((s) {
+        switch (_libraryGrouping) {
+          case LibraryGrouping.artist:
+            return s.artist == _groupArtist;
+          case LibraryGrouping.genre:
+            return s.genre == _groupGenre;
+          case LibraryGrouping.year:
+            return s.year == _groupYear;
+          case LibraryGrouping.all:
+            return true;
+        }
+      }).toList();
+    }
+    final target = _navidromeTarget();
+    if (target == null) return const <SongInfo>[];
+    final chosen = albums.take(12).toList();
+    final pages = await Future.wait(
+      chosen.map((a) => fetchNavidromeAlbum(target, a.id, onError: _log)),
+    );
+    return pages.expand((p) => p).toList();
+  }
+
+  Future<void> _toggleExpansion(
+    String key,
+    Future<List<SongInfo>> Function() loader,
+  ) async {
+    if (_expandedKey == key) {
+      setState(() {
+        _expandedKey = null;
+        _expandedTracks = const <SongInfo>[];
+      });
+      return;
+    }
+    if (mounted) setState(() => _loadingTracks = true);
+    final songs = await loader();
+    if (!mounted) return;
+    setState(() {
+      _expandedKey = key;
+      _expandedTracks = songs;
+      _loadingTracks = false;
+      _songs = songs;
+      _source = _activeLibrary == "lms" ? "lms" : "navidrome";
+    });
+  }
+
+  Future<void> _toggleAlbum(AlbumInfo album) async {
+    await _toggleExpansion("album:${album.id}", () => _albumTracks(album));
+    if (_activeLibrary == "navidrome") {
+      final target = _navidromeTarget();
+      if (target == null) return;
+      final note = await fetchNavidromeAlbumNote(target, album.id, onError: _log);
+      final bio = await fetchNavidromeArtistBio(
+        target,
+        album.artistId,
+        onError: _log,
+      );
+      if (!mounted) return;
+      setState(() {
+        _albumNote = note;
+        _artistBio = bio;
+      });
+    }
+  }
+
+  Future<void> _toggleGroup(List<AlbumInfo> albums) {
+    final key =
+        "group:${_groupingLabel(_libraryGrouping)}:$_groupValueText";
+    return _toggleExpansion(key, () => _groupTracks(albums));
+  }
+
+  Widget _expandedTrackList(String key) {
+    if (_expandedKey != key) return const SizedBox.shrink();
+    if (_loadingTracks) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: LinearProgressIndicator(),
+      );
+    }
+    if (_expandedTracks.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(left: 56, bottom: 8),
+        child: Text("没有可展开的曲目", style: TextStyle(color: Colors.grey)),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.only(left: 56, bottom: 4),
+          child: Text("曲目 ${_expandedTracks.length} 首 · 点击直接播放"),
+        ),
+        ..._expandedTracks.map(
+          (s) => ListTile(
+            dense: true,
+            leading: Text(
+              s.trackText.isEmpty ? "♪" : s.trackText,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            title: Text(s.title),
+            subtitle: s.metaText.isEmpty
+                ? null
+                : Text(s.metaText, style: const TextStyle(fontSize: 11)),
+            trailing: const Icon(Icons.play_arrow, size: 18),
+            onTap: () => unawaited(
+              _activeLibrary == "lms"
+                  ? _playLmsSong(s)
+                  : _playNavidromeSong(s),
+            ),
+          ),
+        ),
+        const Divider(),
+      ],
+    );
+  }
+
+  List<Widget> _albumCards(List<AlbumInfo> albums) {
+    return albums.map((a) {
+      final key = "album:${a.id}";
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          ListTile(
+            leading: _albumCover(a),
+            title: Text(a.name),
+            subtitle: Text(
+              [
+                a.artist.isEmpty ? "未知艺人" : a.artist,
+                if (a.metaText.isNotEmpty) a.metaText,
+              ].join(" · "),
+            ),
+            trailing: Icon(
+              _expandedKey == key ? Icons.expand_less : Icons.expand_more,
+            ),
+            onTap: () => unawaited(_toggleAlbum(a)),
+          ),
+          _expandedTrackList(key),
+        ],
+      );
+    }).toList();
+  }
+
+  Widget _albumCover(AlbumInfo album) {
+    if (_activeLibrary == "lms") {
+      final cid = album.coverId;
+      final target = _target;
+      if (cid.isNotEmpty && target != null) {
+        return CircleAvatar(
+          backgroundColor: Colors.grey.shade200,
+          backgroundImage: LmsCoverImage(target: target, coverId: cid),
+          child: null,
+        );
+      }
+      return const CircleAvatar(child: Icon(Icons.album));
+    }
+    return CircleAvatar(
+      backgroundColor: Colors.grey.shade200,
+      backgroundImage:
+          album.coverUrl.isEmpty ? null : NetworkImage(album.coverUrl),
+      child: album.coverUrl.isEmpty ? const Icon(Icons.album) : null,
+    );
+  }
+
   List<Widget> _lmsLibraryWidgets() {
     final showIndex = _libraryGrouping != LibraryGrouping.all && !_hasGroupValue;
     if (showIndex) {
@@ -1073,36 +1280,24 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         ],
       ),
       _libraryGroupingBar(),
-      if (_hasGroupValue) _libraryBreadcrumb(),
-      if (_selectedLmsAlbum != null) _infoCard("当前专辑", _selectedLmsAlbum!.name),
-      ...albums.map(
-        (a) => ListTile(
-          leading: const CircleAvatar(child: Icon(Icons.album)),
-          title: Text(a.name),
-          subtitle: Text(
-            [
-              a.artist.isEmpty ? "未知艺人" : a.artist,
-              if (a.metaText.isNotEmpty) a.metaText,
-            ].join(" · "),
+      if (_hasGroupValue) ...<Widget>[
+        _libraryBreadcrumb(),
+        ListTile(
+          leading: const CircleAvatar(child: Icon(Icons.playlist_play)),
+          title: Text("展开「$_groupValueText」全部曲目"),
+          subtitle: const Text("按当前分组汇总曲目，点击直接播放"),
+          trailing: Icon(
+            _expandedKey.toString().startsWith("group:")
+                ? Icons.expand_less
+                : Icons.expand_more,
           ),
-          onTap: () => unawaited(_loadLmsSongs(a)),
+          onTap: () => unawaited(_toggleGroup(albums)),
         ),
-      ),
-      const Divider(),
-      Text("歌曲 ${_lmsSongs.length} 首"),
-      ..._lmsSongs.map(
-        (s) => ListTile(
-          title: Text(s.title),
-          subtitle: Text(
-            [
-              s.artist.isEmpty ? "未知艺人" : s.artist,
-              if (s.metaText.isNotEmpty) s.metaText,
-            ].join(" · "),
-          ),
-          trailing: const Icon(Icons.play_arrow),
-          onTap: () => unawaited(_playLmsSong(s)),
+        _expandedTrackList(
+          "group:${_groupingLabel(_libraryGrouping)}:$_groupValueText",
         ),
-      ),
+      ],
+      ..._albumCards(albums),
     ];
   }
 
@@ -1154,44 +1349,28 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           _libraryGroupingBar(),
         ],
       ),
-      if (_hasGroupValue) _libraryBreadcrumb(),
+      if (_hasGroupValue) ...<Widget>[
+        _libraryBreadcrumb(),
+        ListTile(
+          leading: const CircleAvatar(child: Icon(Icons.playlist_play)),
+          title: Text("展开「$_groupValueText」全部曲目"),
+          subtitle: const Text("汇总当前分组的曲目，点击直接播放"),
+          trailing: Icon(
+            _expandedKey.toString().startsWith("group:")
+                ? Icons.expand_less
+                : Icons.expand_more,
+          ),
+          onTap: () => unawaited(_toggleGroup(albums)),
+        ),
+        _expandedTrackList(
+          "group:${_groupingLabel(_libraryGrouping)}:$_groupValueText",
+        ),
+      ],
       const Divider(),
       Text("专辑 ${albums.length} / ${_albums.length} 张 · $_currentServerName"),
       if (_albumNote.isNotEmpty) _infoCard("专辑简介", _albumNote),
       if (_artistBio.isNotEmpty) _infoCard("艺人简介", _artistBio),
-      ...albums.map(
-        (a) => ListTile(
-          leading: a.coverUrl.isEmpty
-              ? null
-              : CircleAvatar(backgroundImage: NetworkImage(a.coverUrl)),
-          title: Text(a.name),
-          subtitle: Text(
-            [
-              a.artist.isEmpty ? "未知艺人" : a.artist,
-              if (a.metaText.isNotEmpty) a.metaText,
-            ].join(" · "),
-          ),
-          onTap: () => unawaited(_loadSongs(a)),
-        ),
-      ),
-      const Divider(),
-      Text("歌曲 ${_songs.length} 首"),
-      ..._songs.map(
-        (s) => ListTile(
-          leading: s.coverUrl.isEmpty
-              ? null
-              : CircleAvatar(backgroundImage: NetworkImage(s.coverUrl)),
-          title: Text(s.title),
-          subtitle: Text(
-            [
-              s.artist.isEmpty ? "未知艺人" : s.artist,
-              if (s.metaText.isNotEmpty) s.metaText,
-            ].join(" · "),
-          ),
-          trailing: const Icon(Icons.play_arrow),
-          onTap: () => unawaited(_playNavidromeSong(s)),
-        ),
-      ),
+      ..._albumCards(albums),
     ];
   }
 
@@ -1479,32 +1658,17 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     try {
       var albums = await fetchLmsAlbums(target, onError: _log);
       albums = await enrichLmsAlbumsWithGenres(target, albums, onError: _log);
+      if (!sonoraSkipCoverEnrichment) {
+        albums = await enrichLmsAlbumsWithCovers(target, albums, onError: _log);
+      }
       if (!mounted) return;
       setState(() {
         _lmsAlbums = albums;
-        _lmsSongs = const <SongInfo>[];
-        _selectedLmsAlbum = null;
       });
       _log("LMS 专辑 ${albums.length} 张");
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  Future<void> _loadLmsSongs(AlbumInfo album) async {
-    final target = _target;
-    if (target == null) return;
-    final songs = await fetchLmsTracks(
-      target,
-      album: album.name,
-      onError: _log,
-    );
-    if (!mounted) return;
-    setState(() {
-      _selectedLmsAlbum = album;
-      _lmsSongs = songs;
-    });
-    _log("$_currentServerName / ${album.name}：${songs.length} 首");
   }
 
   Future<void> _playLmsSong(SongInfo song) async {
@@ -1518,6 +1682,16 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     _lastAudioTrackId = "";
     _log(ok ? "LMS 播放：${song.title}" : "LMS 播放失败：${song.title}");
     unawaited(_refreshStatus());
+  }
+
+  /// Called once at startup for the persisted active library.
+  Future<void> _autoRestoreLibrary() async {
+    if (_activeLibrary == "lms") {
+      await _connect();
+      await _loadLmsAlbums();
+    } else {
+      await _loadAlbums();
+    }
   }
 
   Future<void> _connect() async {
@@ -1792,6 +1966,36 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     await _playNavidromeSong(_songs[next]);
   }
 
+  /// Headless end-to-end check for the reported "LMS play does nothing" bug:
+  /// startup auto-restore must connect, register a player, load albums and
+  /// issue a play command on the first track of the first album.
+  Future<void> _verifyLmsAutoPlay() async {
+    // Cover enrichment issues ~60 songinfo requests; skip it in this check so
+    // the play path can be verified quickly.
+    sonoraSkipCoverEnrichment = true;
+    await _autoRestoreLibrary();
+    if (_target == null || _playerId == null) {
+      _log("LMS 验证失败：未连接或无播放器");
+      return;
+    }
+    if (_lmsAlbums.isEmpty) {
+      _log("LMS 验证失败：专辑为空");
+      return;
+    }
+    final songs = await _albumTracks(_lmsAlbums.first);
+    if (songs.isEmpty) {
+      _log("LMS 验证失败：首张专辑无曲目");
+      return;
+    }
+    await _playLmsSong(songs.first);
+    await Future.delayed(const Duration(seconds: 3));
+    await _refreshStatus();
+    _log(
+      "LMS 验证完成：播放器 $_playerId，播放 ${songs.first.title}，"
+      "当前状态 ${_status.title}",
+    );
+  }
+
   Future<void> _autoPlayNavidrome() async {
     await _loadAlbums();
     if (_albums.isEmpty) {
@@ -1940,30 +2144,6 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  Future<void> _loadSongs(AlbumInfo album) async {
-    final target = _navidromeTarget();
-    if (target == null) return;
-    final songs = await fetchNavidromeAlbum(
-      target,
-      album.id,
-      onError: (m) => _log("专辑详情 $m"),
-    );
-    final note = await fetchNavidromeAlbumNote(target, album.id, onError: _log);
-    final bio = await fetchNavidromeArtistBio(
-      target,
-      album.artistId,
-      onError: _log,
-    );
-    if (!mounted) return;
-    setState(() {
-      _songs = songs;
-      _albumNote = note;
-      _artistBio = bio;
-      _lyrics = const <LyricLine>[];
-    });
-    _log("$_currentServerName / ${album.name}：${songs.length} 首");
   }
 
   Future<void> _searchNavidrome() async {

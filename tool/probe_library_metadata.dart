@@ -39,6 +39,7 @@ Future<void> main() async {
     ]);
     var lmsAlbums = await fetchLmsAlbums(lms, count: 300);
     lmsAlbums = await enrichLmsAlbumsWithGenres(lms, lmsAlbums);
+    lmsAlbums = await enrichLmsAlbumsWithCovers(lms, lmsAlbums);
     final lmsArtists = await fetchLmsArtists(lms);
     final lmsGenres = await fetchLmsGenres(lms);
     final byArtist = groupAlbumsByArtist(lmsAlbums);
@@ -53,6 +54,7 @@ Future<void> main() async {
     out["lmsWithYear"] = lmsAlbums.where((a) => a.year > 0).length;
     out["lmsWithArtist"] = lmsAlbums.where((a) => a.artist.isNotEmpty).length;
     out["lmsWithGenre"] = lmsAlbums.where((a) => a.genre.isNotEmpty).length;
+    out["lmsWithCover"] = lmsAlbums.where((a) => a.coverId.isNotEmpty).length;
     out["lmsSample"] = lmsAlbums.isEmpty
         ? <String, dynamic>{}
         : <String, dynamic>{

@@ -197,6 +197,9 @@ class AlbumInfo {
   final String artistId;
   final String coverUrl;
 
+  /// LMS artwork id; cover URL requires Basic Auth and is built in the UI.
+  final String coverId;
+
   /// Richer metadata returned by the servers when available.
   final int year;
   final String genre;
@@ -210,6 +213,7 @@ class AlbumInfo {
     this.artist = "",
     this.artistId = "",
     this.coverUrl = "",
+    this.coverId = "",
     this.year = 0,
     this.genre = "",
     this.songCount = 0,
@@ -224,6 +228,7 @@ class AlbumInfo {
     String? artist,
     String? artistId,
     String? coverUrl,
+    String? coverId,
     int? year,
     String? genre,
     int? songCount,
@@ -237,6 +242,7 @@ class AlbumInfo {
       artist: artist ?? this.artist,
       artistId: artistId ?? this.artistId,
       coverUrl: coverUrl ?? this.coverUrl,
+      coverId: coverId ?? this.coverId,
       year: year ?? this.year,
       genre: genre ?? this.genre,
       songCount: songCount ?? this.songCount,
@@ -270,6 +276,9 @@ class SongInfo {
   /// Technical metadata when the server provides it.
   final AudioInfo? audio;
 
+  /// LMS artwork id (songinfo coverid); used by the authenticated provider.
+  final String coverId;
+
   /// Position inside the album and richer library metadata.
   final int track;
   final int disc;
@@ -286,6 +295,7 @@ class SongInfo {
     this.duration = 0,
     this.coverUrl = "",
     this.audio,
+    this.coverId = "",
     this.track = 0,
     this.disc = 0,
     this.year = 0,

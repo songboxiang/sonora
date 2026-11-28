@@ -186,6 +186,67 @@ Future<List<SongInfo>> fetchLmsTracks(
   return all.where((s) => s.album == album).toList();
 }
 
+/// LMS exposes cover art id only through `songinfo ... tags:Gc`, never in
+/// albums_loop or titles_loop. Fetch one representative track per album and
+/// decorate both album and its songs with a cover id.
+Future<List<AlbumInfo>> enrichLmsAlbumsWithCovers(
+  LmsTarget target,
+  List<AlbumInfo> albums, {
+  int concurrency = 6,
+  void Function(String)? onError,
+}) async {
+  if (albums.isEmpty) return albums;
+  final coverByAlbum = <String, String>{};
+  final queue = List<AlbumInfo>.from(albums);
+  final workers = List.generate(concurrency, (_) async {
+    while (queue.isNotEmpty) {
+      final album = queue.removeAt(0);
+      if (coverByAlbum.containsKey(album.name)) continue;
+      final root = await lmsRpc(target, [
+        "",
+        ["tracks", 0, 8, album.name],
+      ], quiet: true);
+      if (root == null) continue;
+      final tracks = parseLmsTracks(root);
+      if (tracks.isEmpty) continue;
+      // One songinfo request per album is enough; cover art is album-wide.
+      final cid = await lmsTrackCoverId(target, tracks.first.id);
+      if (cid.isNotEmpty) coverByAlbum[album.name] = cid;
+    }
+  });
+  await Future.wait(workers);
+  return albums.map((a) {
+    final cid = coverByAlbum[a.name] ?? "";
+    return cid.isEmpty ? a : a.copyWith(coverId: cid);
+  }).toList();
+}
+
+/// Parse the coverid from a songinfo response (tags:Gc).
+String parseLmsCoverId(Map<String, dynamic> root) {
+  final loop = _asList(lmsResult(root)["songinfo_loop"]);
+  for (final e in loop) {
+    final m = _asMap(e) ?? <String, dynamic>{};
+    final cid = _str(m["coverid"] ?? m["artwork_track_id"]);
+    if (cid.isNotEmpty) return cid;
+  }
+  return "";
+}
+
+/// Fetch coverid for a single track.
+Future<String> lmsTrackCoverId(
+  LmsTarget target,
+  String trackId, {
+  void Function(String)? onError,
+}) async {
+  if (trackId.isEmpty) return "";
+  final root = await lmsRpc(target, [
+    "",
+    ["songinfo", 0, 100, "track_id:$trackId", "tags:Gc"],
+  ], quiet: true, onError: onError);
+  if (root == null) return "";
+  return parseLmsCoverId(root);
+}
+
 /// LMS albums_loop has no genre, but titles_loop does. Enrich the album
 /// list from a single full tracks fetch so the genre hierarchy is usable.
 Future<List<AlbumInfo>> enrichLmsAlbumsWithGenres(

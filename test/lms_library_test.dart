@@ -90,4 +90,23 @@ void main() {
     expect(byYear[2020]?.length, 2);
     expect(albumsForYear(albums, 2021).single.name, "[2021]C");
   });
+
+  test("parseLmsCoverId reads coverid from songinfo_loop", () {
+    final root = j(
+      "{\"result\":{\"songinfo_loop\":[{\"id\":4425},"
+      "{\"title\":\"一场游戏一场梦\"},{\"coverid\":\"1c6ae12c\"}]}}",
+    );
+    expect(parseLmsCoverId(root), "1c6ae12c");
+    expect(parseLmsCoverId(j("{\"result\":{}}")), "");
+  });
+
+  test("AlbumInfo copyWith preserves coverId and new metadata", () {
+    final a = parseLmsAlbums(
+      j("{\"result\":{\"albums_loop\":[{\"id\":1,\"album\":\"A\"}]}}"),
+    ).single.copyWith(coverId: "abc", year: 2020, genre: "Pop");
+    expect(a.coverId, "abc");
+    expect(a.year, 2020);
+    expect(a.genre, "Pop");
+    expect(a.metaText, contains("2020"));
+  });
 }
