@@ -258,6 +258,20 @@ Future<PlaybackStatus> fetchLmsStatus(
   return parseLmsStatus(root, target.baseUrl);
 }
 
+Future<AudioInfo> fetchLmsTrackAudioInfo(
+  LmsTarget target,
+  String trackId, {
+  void Function(String)? onError,
+}) async {
+  if (trackId.isEmpty) return const AudioInfo();
+  final root = await lmsRpc(target, [
+    "",
+    ["songinfo", 0, 100, "track_id:$trackId", "tags:rTIoQ"],
+  ], onError: onError);
+  if (root == null) return const AudioInfo();
+  return parseLmsAudioInfo(root);
+}
+
 Future<void> sendLmsCommand(
   LmsTarget target,
   String playerId,

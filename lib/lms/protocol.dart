@@ -24,7 +24,9 @@ Map<String, dynamic> lmsResult(Map<String, dynamic> root) =>
 /// LMS "version ?" returns {"_version": "9.1.1"}, NOT {"version": ...}.
 ServerInfo parseLmsVersion(Map<String, dynamic> root) {
   final r = lmsResult(root);
-  final v = _str(r["_version"]).isNotEmpty ? _str(r["_version"]) : _str(r["version"]);
+  final v = _str(r["_version"]).isNotEmpty
+      ? _str(r["_version"])
+      : _str(r["version"]);
   return ServerInfo(
     type: "lms",
     version: v,
@@ -83,4 +85,19 @@ PlaybackStatus parseLmsStatus(Map<String, dynamic> root, String base) {
     artworkUrl: artId.isEmpty ? "" : "$base/music/$artId/cover",
     trackId: _str(m["id"]),
   );
+}
+
+/// `songinfo 0 100 track_id:<id> tags:rTIoQ` 的技术字段。
+AudioInfo parseLmsAudioInfo(Map<String, dynamic> root) {
+  final r = lmsResult(root);
+  final loop = _asList(r["songinfo_loop"]);
+  final m = <String, dynamic>{};
+  for (final item in loop) {
+    final one = _asMap(item) ?? <String, dynamic>{};
+    for (final entry in one.entries) {
+      m[entry.key] = entry.value;
+    }
+  }
+  if (m.isEmpty) return const AudioInfo();
+  return AudioInfo.fromLms(m);
 }

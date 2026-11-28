@@ -7,8 +7,9 @@ Map<String, dynamic> j(String s) => jsonDecode(s) as Map<String, dynamic>;
 
 void main() {
   test("version uses underscore-prefixed field", () {
-    final s = parseLmsVersion(j(
-        "{\"result\":{\"_version\":\"9.1.1\"},\"id\":1}"));
+    final s = parseLmsVersion(
+      j("{\"result\":{\"_version\":\"9.1.1\"},\"id\":1}"),
+    );
     expect(s.version, "9.1.1");
     expect(s.reachable, isTrue);
   });
@@ -20,22 +21,32 @@ void main() {
 
   test("player count reads count field", () {
     expect(parsePlayerCount(j("{\"result\":{\"count\":0}}")), 0);
-    expect(parsePlayerCount(j(
-        "{\"result\":{\"players_loop\":[{\"playerid\":\"x\"}]}}")), 1);
+    expect(
+      parsePlayerCount(
+        j("{\"result\":{\"players_loop\":[{\"playerid\":\"x\"}]}}"),
+      ),
+      1,
+    );
   });
 
   test("parsePlayers maps ids and names", () {
-    final p = parsePlayers(j(
-        "{\"result\":{\"players_loop\":[{\"playerid\":\"02:00:00:00:00:00\",\"name\":\"客厅\"}]}}"));
+    final p = parsePlayers(
+      j(
+        "{\"result\":{\"players_loop\":[{\"playerid\":\"02:00:00:00:00:00\",\"name\":\"客厅\"}]}}",
+      ),
+    );
     expect(p.single.id, "02:00:00:00:00:00");
     expect(p.single.name, "客厅");
   });
 
   test("parsePlayers keeps connected flag for stale entries", () {
-    final p = parsePlayers(j(
+    final p = parsePlayers(
+      j(
         "{\"result\":{\"players_loop\":["
         "{\"playerid\":\"a\",\"name\":\"live\",\"connected\":1},"
-        "{\"playerid\":\"b\",\"name\":\"stale\",\"connected\":0}]}}"));
+        "{\"playerid\":\"b\",\"name\":\"stale\",\"connected\":0}]}}",
+      ),
+    );
     expect(p.first.connected, isTrue);
     expect(p.last.connected, isFalse);
   });
@@ -51,10 +62,13 @@ void main() {
   });
 
   test("status parses fields and artwork", () {
-    final s = parseLmsStatus(j(
+    final s = parseLmsStatus(
+      j(
         "{\"result\":{\"mode\":\"play\",\"title\":\"Song\",\"artist\":\"Artist\","
-        "\"duration\":\"200\",\"time\":42,\"volume\":25,\"artwork_track_id\":\"123\"}}"),
-        "http://192.168.199.2:9000");
+        "\"duration\":\"200\",\"time\":42,\"volume\":25,\"artwork_track_id\":\"123\"}}",
+      ),
+      "http://192.168.199.2:9000",
+    );
     expect(s.mode, "play");
     expect(s.isPlaying, isTrue);
     expect(s.duration, 200);
@@ -67,5 +81,20 @@ void main() {
     expect(compareVersions("0.64.2", "0.55.2 (a057a680)"), 1);
     expect(compareVersions("v2.0.18", "2.0.9"), 1);
     expect(compareVersions("9.1.1", "9.1.1"), 0);
+  });
+
+  test("songinfo audio tags parse bitrate, rate, depth and format", () {
+    final a = parseLmsAudioInfo(
+      j(
+        "{\"result\":{\"songinfo_loop\":[{\"bitrate\":\"815kbps VBR\"},"
+        "{\"samplerate\":44100},{\"samplesize\":16},{\"type\":\"flc\"},"
+        "{\"lossless\":1}]}}",
+      ),
+    );
+    expect(a.formatText, "FLAC");
+    expect(a.sampleRateText, "44.1 kHz");
+    expect(a.bitDepthText, "16 bit");
+    expect(a.bitrateText, "815 kbps VBR");
+    expect(a.lossless, isTrue);
   });
 }

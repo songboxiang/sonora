@@ -182,4 +182,21 @@ void main() {
     expect(songs.single.coverUrl, contains("getCoverArt"));
     expect(songs.single.coverUrl, isNot(contains("secret")));
   });
+
+  test("parseAlbum carries audio metadata", () {
+    final songs = parseAlbum(
+      j(
+        "{\"subsonic-response\":{\"album\":{\"song\":[{\"id\":\"s1\","
+        "\"title\":\"Song\",\"bitRate\":865,\"samplingRate\":44100,"
+        "\"bitDepth\":16,\"channelCount\":2,\"suffix\":\"flac\","
+        "\"contentType\":\"audio/flac\"}]}}}",
+      ),
+    );
+    expect(songs.single.audio?.bitrateText, "865 kbps");
+    expect(songs.single.audio?.sampleRateText, "44.1 kHz");
+    expect(songs.single.audio?.bitDepthText, "16 bit");
+    expect(songs.single.audio?.formatText, "FLAC");
+    expect(songs.single.audio?.channels, 2);
+    expect(songs.single.audio?.lossless, isTrue);
+  });
 }

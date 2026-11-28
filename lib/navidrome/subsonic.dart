@@ -127,6 +127,7 @@ List<SongInfo> parseAlbum(
       coverUrl: base.isEmpty
           ? ""
           : _coverUrl(base, auth, _str(m["coverArt"]), 300),
+      audio: AudioInfo.fromSubsonic(m),
     );
   }).toList();
 }
@@ -166,6 +167,7 @@ List<SongInfo> parseSearch3Songs(
       album: _str(m["album"]),
       duration: _int(m["duration"]),
       coverUrl: _coverUrl(base, auth, _str(m["coverArt"]), 300),
+      audio: AudioInfo.fromSubsonic(m),
     );
   }).toList();
 }

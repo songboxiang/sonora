@@ -98,6 +98,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   bool _autoAdvancing = false;
   String _source = "lms";
   SongInfo? _currentSong;
+  AudioInfo? _audioInfo;
+  String _lastAudioTrackId = "";
 
   // 升级页（主体 / 核心下载校验，不做自动替换）
   final _appZipUrl = TextEditingController();
@@ -1053,6 +1055,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           _settings.activeServerId = server.id;
           _activeLibrary = "navidrome";
           _source = "navidrome";
+          _audioInfo = _currentSong?.audio;
           _albums = const <AlbumInfo>[];
           _songs = const <SongInfo>[];
           _albumNote = "";
@@ -1063,6 +1066,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         _settings.activeServerId = server.id;
         _activeLibrary = "navidrome";
         _source = "navidrome";
+        _audioInfo = _currentSong?.audio;
         _albums = const <AlbumInfo>[];
         _songs = const <SongInfo>[];
         _albumNote = "";
@@ -1092,6 +1096,8 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         setState(() {
           _activeLibrary = "lms";
           _source = "lms";
+          _audioInfo = const AudioInfo();
+          _lastAudioTrackId = "";
         });
         _log("切换到 LMS 曲库，自动开启引擎");
         await _connect();
@@ -1102,6 +1108,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
         setState(() {
           _activeLibrary = "navidrome";
           _source = "navidrome";
+          _audioInfo = _currentSong?.audio;
         });
         _log("切换到 OpenSubsonic 曲库（$_currentServerName），引擎已自动关闭");
         await _loadAlbums();
@@ -1157,6 +1164,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       return;
     }
     final ok = await playLmsTrack(target, playerId, song.id, onError: _log);
+    _lastAudioTrackId = "";
     _log(ok ? "LMS 播放：${song.title}" : "LMS 播放失败：${song.title}");
     unawaited(_refreshStatus());
   }
@@ -1353,6 +1361,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     setState(() {
       _source = "navidrome";
       _currentSong = song;
+      _audioInfo = song.audio;
       _status = _navStatus(position: 0, playing: true);
     });
     _subscribeAudio();
@@ -1463,6 +1472,18 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _refreshLmsAudioInfo(String trackId) async {
+    final target = _target;
+    if (target == null || trackId.isEmpty) return;
+    final info = await fetchLmsTrackAudioInfo(
+      target,
+      trackId,
+      onError: (m) => _log("音质信息 $m"),
+    );
+    if (!mounted) return;
+    setState(() => _audioInfo = info);
+  }
+
   Future<void> _refreshStatus() async {
     final target = _target;
     final id = _playerId;
@@ -1473,6 +1494,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _status = s;
       _volume = s.volume;
     });
+    if (s.trackId.isNotEmpty && s.trackId != _lastAudioTrackId) {
+      _lastAudioTrackId = s.trackId;
+      unawaited(_refreshLmsAudioInfo(s.trackId));
+    }
   }
 
   Future<void> _command(List<String> cmd, String label) async {
@@ -1645,6 +1670,54 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     );
   }
 
+  Widget _qualityCard() {
+    final isLms = _source != "navidrome";
+    final modeText = isLms
+        ? (_coreParams.allowResample
+              ? "允许 macOS 重采样（-a ${_coreParams.latencyMs}:1）"
+              : "完美码率直通（-a ${_coreParams.latencyMs}:0）")
+        : "客户端流解码（不经 squeezelite）";
+    final modeColor = isLms
+        ? (_coreParams.allowResample
+              ? Colors.orange.shade700
+              : Colors.green.shade700)
+        : Colors.indigo;
+    final device = isLms
+        ? (_coreParams.deviceName.isNotEmpty
+              ? _coreParams.deviceName
+              : _coreParams.device)
+        : "just_audio · $_currentServerName";
+    final audio = _audioInfo;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(Icons.high_quality_outlined, color: modeColor, size: 18),
+                const SizedBox(width: 6),
+                const Text(
+                  "当前播放效果",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            _statusRow("输出模式", modeText),
+            _statusRow("音质", audio == null ? "-" : audio.summary),
+            _statusRow(
+              "无损",
+              audio == null ? "-" : (audio.lossless ? "是" : "否 / 未知"),
+            ),
+            _statusRow("输出", device.isEmpty ? "-" : device),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _statusRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1808,6 +1881,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   ),
                   Text(_status.artist.isEmpty ? "" : "艺人：${_status.artist}"),
                   Text(_status.album.isEmpty ? "" : "专辑：${_status.album}"),
+                  _qualityCard(),
                   if (_source == "navidrome" &&
                       _currentSong != null &&
                       _currentSong!.coverUrl.isNotEmpty)

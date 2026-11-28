@@ -39,6 +39,117 @@ class UpdateInfo {
   }
 }
 
+/// 当前曲目的技术信息。两个轨道的字段来源不同，缺失项显示 "-"。
+class AudioInfo {
+  const AudioInfo({
+    this.bitrate = "",
+    this.sampleRate = 0,
+    this.bitDepth = 0,
+    this.channels = 0,
+    this.format = "",
+    this.lossless = false,
+  });
+
+  /// 原始展示串，例如 LMS 返回 "815kbps VBR"。
+  final String bitrate;
+  final int sampleRate;
+  final int bitDepth;
+  final int channels;
+  final String format;
+  final bool lossless;
+
+  bool get hasData =>
+      bitrate.isNotEmpty || sampleRate > 0 || bitDepth > 0 || format.isNotEmpty;
+
+  String get bitrateText {
+    if (bitrate.isEmpty) return "-";
+    return bitrate
+        .replaceFirst(RegExp(r"kbps"), " kbps")
+        .replaceAll(RegExp(r"\s+"), " ")
+        .trim();
+  }
+
+  String get sampleRateText {
+    if (sampleRate <= 0) return "-";
+    final k = sampleRate / 1000.0;
+    final digits = k == k.roundToDouble() ? 0 : 1;
+    return "${k.toStringAsFixed(digits)} kHz";
+  }
+
+  String get bitDepthText => bitDepth > 0 ? "$bitDepth bit" : "-";
+  String get channelsText =>
+      channels > 0 ? (channels == 1 ? "单声道" : "$channels 声道") : "-";
+
+  String get formatText {
+    final f = format.trim().toUpperCase();
+    if (f.isEmpty) return "-";
+    const aliases = <String, String>{
+      "FLC": "FLAC",
+      "FLAC": "FLAC",
+      "M4A": "AAC",
+      "M4B": "AAC",
+      "AIF": "AIFF",
+      "DSF": "DSD",
+      "DFF": "DSD",
+    };
+    return aliases[f] ?? f;
+  }
+
+  String get summary {
+    if (!hasData) return "暂无音质信息";
+    final parts = <String>[
+      if (format.isNotEmpty) formatText,
+      if (sampleRate > 0) sampleRateText,
+      if (bitDepth > 0) bitDepthText,
+      if (bitrate.isNotEmpty) bitrateText,
+      if (channels > 0) channelsText,
+    ];
+    return parts.join(" · ");
+  }
+
+  static AudioInfo fromLms(Map<String, dynamic> m) {
+    final lossless =
+        m["lossless"] == true ||
+        m["lossless"].toString() == "1" ||
+        m["lossless"].toString().toLowerCase() == "true";
+    return AudioInfo(
+      bitrate: (m["bitrate"] ?? "").toString(),
+      sampleRate: int.tryParse((m["samplerate"] ?? "").toString()) ?? 0,
+      bitDepth: int.tryParse((m["samplesize"] ?? "").toString()) ?? 0,
+      format: (m["type"] ?? "").toString(),
+      lossless: lossless,
+    );
+  }
+
+  static AudioInfo fromSubsonic(Map<String, dynamic> m) {
+    final contentType = (m["contentType"] ?? "").toString().toLowerCase();
+    final suffix = (m["suffix"] ?? "").toString();
+    final fmt = suffix.isNotEmpty
+        ? suffix
+        : contentType.contains("/")
+        ? contentType.split("/").last
+        : contentType;
+    final bitRate = int.tryParse((m["bitRate"] ?? "").toString()) ?? 0;
+    const losslessFormats = <String>{
+      "FLAC",
+      "ALAC",
+      "WAV",
+      "AIFF",
+      "DSF",
+      "DFF",
+      "DSD",
+    };
+    return AudioInfo(
+      bitrate: bitRate > 0 ? "$bitRate kbps" : "",
+      sampleRate: int.tryParse((m["samplingRate"] ?? "").toString()) ?? 0,
+      bitDepth: int.tryParse((m["bitDepth"] ?? "").toString()) ?? 0,
+      channels: int.tryParse((m["channelCount"] ?? "").toString()) ?? 0,
+      format: fmt,
+      lossless: losslessFormats.contains(fmt.toUpperCase()),
+    );
+  }
+}
+
 class PlaybackStatus {
   final String mode;
   final String title;
@@ -103,6 +214,9 @@ class SongInfo {
 
   /// Authenticated getCoverArt URL; never contains the plain password.
   final String coverUrl;
+
+  /// Technical metadata when the server provides it.
+  final AudioInfo? audio;
   const SongInfo({
     required this.id,
     required this.title,
@@ -110,6 +224,7 @@ class SongInfo {
     this.album = "",
     this.duration = 0,
     this.coverUrl = "",
+    this.audio,
   });
 }
 
