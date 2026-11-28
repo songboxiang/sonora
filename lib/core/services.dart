@@ -19,7 +19,8 @@ String formatDuration(int seconds) {
   return "$m:${s.toString().padLeft(2, "0")}";
 }
 
-Map<String, dynamic> parseJson(String s) => jsonDecode(s) as Map<String, dynamic>;
+Map<String, dynamic> parseJson(String s) =>
+    jsonDecode(s) as Map<String, dynamic>;
 
 /// Reads JSON or key=value credential files. Values are never logged.
 Map<String, String> readCreds(String path) {
@@ -38,7 +39,10 @@ Map<String, String> readCreds(String path) {
   return out;
 }
 
-Future<String> getText(String url, {Duration timeout = const Duration(seconds: 12)}) async {
+Future<String> getText(
+  String url, {
+  Duration timeout = const Duration(seconds: 12),
+}) async {
   final req = await httpClient.getUrl(Uri.parse(url)).timeout(timeout);
   final resp = await req.close().timeout(timeout);
   final body = await utf8.decoder.bind(resp).join();
@@ -113,14 +117,19 @@ Future<Map<String, dynamic>?> lmsRpc(
   void Function(String)? onError,
 }) async {
   try {
-    final req = await httpClient.postUrl(Uri.parse("${target.baseUrl}/jsonrpc.js"))
+    final req = await httpClient
+        .postUrl(Uri.parse("${target.baseUrl}/jsonrpc.js"))
         .timeout(const Duration(seconds: 8));
     req.headers.contentType = ContentType.json;
     // LMS closes idle connections when a player joins; do not reuse them.
     req.headers.set(HttpHeaders.connectionHeader, "close");
     final auth = target.auth;
     if (auth != null) req.headers.set(HttpHeaders.authorizationHeader, auth);
-    final payload = jsonEncode({"id": 1, "method": "slim.request", "params": params});
+    final payload = jsonEncode({
+      "id": 1,
+      "method": "slim.request",
+      "params": params,
+    });
     // LMS rejects chunked bodies; an explicit length is required.
     req.contentLength = utf8.encode(payload).length;
     req.write(payload);
@@ -133,7 +142,9 @@ Future<Map<String, dynamic>?> lmsRpc(
     if (!body.trimLeft().startsWith("{")) {
       if (!quiet) {
         final brief = body.replaceAll(RegExp(r"\s+"), " ");
-        onError?.call("非 JSON 响应：${brief.substring(0, brief.length > 80 ? 80 : brief.length)}");
+        onError?.call(
+          "非 JSON 响应：${brief.substring(0, brief.length > 80 ? 80 : brief.length)}",
+        );
       }
       return null;
     }
@@ -150,7 +161,10 @@ Future<int> lmsPlayerCount(
 }) async {
   final root = await lmsRpc(
     target,
-    ["", ["players", 0, 50]],
+    [
+      "",
+      ["players", 0, 50],
+    ],
     quiet: onError == null,
     onError: onError,
   );
@@ -196,7 +210,10 @@ Future<ServerInfo> probeLms(
 }) async {
   final root = await lmsRpc(
     target,
-    ["", ["version", "?"]],
+    [
+      "",
+      ["version", "?"],
+    ],
     quiet: onError == null,
     onError: onError,
   );
@@ -212,7 +229,10 @@ Future<List<PlayerInfo>> fetchLmsPlayers(
 }) async {
   final root = await lmsRpc(
     target,
-    ["", ["players", 0, 50]],
+    [
+      "",
+      ["players", 0, 50],
+    ],
     quiet: onError == null,
     onError: onError,
   );
@@ -227,7 +247,10 @@ Future<PlaybackStatus> fetchLmsStatus(
 }) async {
   final root = await lmsRpc(
     target,
-    [playerId, ["status", "-", "1"]],
+    [
+      playerId,
+      ["status", "-", "1"],
+    ],
     quiet: onError == null,
     onError: onError,
   );
@@ -241,7 +264,12 @@ Future<void> sendLmsCommand(
   List<String> command, {
   void Function(String)? onError,
 }) async {
-  await lmsRpc(target, [playerId, command], quiet: onError == null, onError: onError);
+  await lmsRpc(
+    target,
+    [playerId, command],
+    quiet: onError == null,
+    onError: onError,
+  );
 }
 
 class NavidromeTarget {
@@ -251,8 +279,19 @@ class NavidromeTarget {
   final SubsonicAuth auth;
 
   String get baseUrl => "http://$host/rest";
-  Map<String, String> query([Map<String, String> extra = const <String, String>{}]) =>
-      auth.query(extra);
+  Map<String, String> query([
+    Map<String, String> extra = const <String, String>{},
+  ]) => auth.query(extra);
+}
+
+class NavidromeSearchResult {
+  const NavidromeSearchResult({
+    this.albums = const <AlbumInfo>[],
+    this.songs = const <SongInfo>[],
+  });
+
+  final List<AlbumInfo> albums;
+  final List<SongInfo> songs;
 }
 
 Future<ServerInfo> probeNavidrome(
@@ -260,7 +299,9 @@ Future<ServerInfo> probeNavidrome(
   void Function(String)? onError,
 }) async {
   try {
-    final raw = await getText("${target.baseUrl}/ping?${Uri(queryParameters: target.query()).query}");
+    final raw = await getText(
+      "${target.baseUrl}/ping?${Uri(queryParameters: target.query()).query}",
+    );
     return parsePing(parseJson(raw));
   } catch (e) {
     final msg = "失败 ${e.toString().split('\n').first}";
@@ -275,12 +316,18 @@ Future<List<AlbumInfo>> fetchNavidromeAlbums(
   void Function(String)? onError,
 }) async {
   try {
-    final q = Uri(queryParameters: target.query({
-      "type": "newest",
-      "size": size.toString(),
-    })).query;
+    final q = Uri(
+      queryParameters: target.query({
+        "type": "newest",
+        "size": size.toString(),
+      }),
+    ).query;
     final raw = await getText("${target.baseUrl}/getAlbumList2?$q");
-    return parseAlbumList(parseJson(raw), "http://${target.host}");
+    return parseAlbumList(
+      parseJson(raw),
+      "http://${target.host}",
+      auth: target.auth,
+    );
   } catch (e) {
     onError?.call("失败 ${e.toString().split('\n').first}");
     return const <AlbumInfo>[];
@@ -295,9 +342,107 @@ Future<List<SongInfo>> fetchNavidromeAlbum(
   try {
     final q = Uri(queryParameters: target.query({"id": id})).query;
     final raw = await getText("${target.baseUrl}/getAlbum?$q");
-    return parseAlbum(parseJson(raw));
+    return parseAlbum(
+      parseJson(raw),
+      base: "http://${target.host}",
+      auth: target.auth,
+    );
   } catch (e) {
     onError?.call("失败 ${e.toString().split('\n').first}");
     return const <SongInfo>[];
+  }
+}
+
+/// Server-side search across albums and songs (OpenSubsonic search3).
+Future<NavidromeSearchResult> searchNavidrome(
+  NavidromeTarget target,
+  String query, {
+  int albumCount = 20,
+  int songCount = 50,
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(
+      queryParameters: target.query(<String, String>{
+        "query": query,
+        "albumCount": albumCount.toString(),
+        "songCount": songCount.toString(),
+        "artistCount": "10",
+      }),
+    ).query;
+    final raw = await getText("${target.baseUrl}/search3?$q");
+    final decoded = parseJson(raw);
+    final base = "http://${target.host}";
+    return NavidromeSearchResult(
+      albums: parseSearch3Albums(decoded, base, auth: target.auth),
+      songs: parseSearch3Songs(decoded, base, auth: target.auth),
+    );
+  } catch (e) {
+    onError?.call("搜索失败 ${e.toString().split('\n').first}");
+    return const NavidromeSearchResult();
+  }
+}
+
+Future<String> fetchNavidromeAlbumNote(
+  NavidromeTarget target,
+  String albumId, {
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(queryParameters: target.query({"id": albumId})).query;
+    return parseAlbumNote(
+      parseJson(await getText("${target.baseUrl}/getAlbumInfo2?$q")),
+    );
+  } catch (e) {
+    onError?.call("专辑简介 ${e.toString().split('\n').first}");
+    return "";
+  }
+}
+
+Future<String> fetchNavidromeArtistBio(
+  NavidromeTarget target,
+  String artistId, {
+  void Function(String)? onError,
+}) async {
+  if (artistId.isEmpty) return "";
+  try {
+    final q = Uri(queryParameters: target.query({"id": artistId})).query;
+    return parseArtistBio(
+      parseJson(await getText("${target.baseUrl}/getArtistInfo2?$q")),
+    );
+  } catch (e) {
+    onError?.call("艺人简介 ${e.toString().split('\n').first}");
+    return "";
+  }
+}
+
+Future<List<LyricLine>> fetchNavidromeLyrics(
+  NavidromeTarget target,
+  String songId, {
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(queryParameters: target.query({"id": songId})).query;
+    return parseStructuredLyrics(
+      parseJson(await getText("${target.baseUrl}/getLyricsBySongId?$q")),
+    );
+  } catch (e) {
+    onError?.call("歌词 ${e.toString().split('\n').first}");
+    return const <LyricLine>[];
+  }
+}
+
+Future<PlaybackStatus> fetchNavidromePlayQueue(
+  NavidromeTarget target, {
+  void Function(String)? onError,
+}) async {
+  try {
+    final q = Uri(queryParameters: target.query()).query;
+    return parsePlayQueue(
+      parseJson(await getText("${target.baseUrl}/getPlayQueue?$q")),
+    );
+  } catch (e) {
+    onError?.call("播放队列 ${e.toString().split('\n').first}");
+    return const PlaybackStatus();
   }
 }

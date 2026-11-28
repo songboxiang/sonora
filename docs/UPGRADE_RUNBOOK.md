@@ -88,6 +88,13 @@ cd ~/Projects/sonora_v2 && dart run tool/probe.dart --with-core \
 cd ~/Projects/sonora_v2 && dart run tool/probe_install.dart
 ```
 
+## N1 曲库与播放补充
+
+- 曲库页新增「搜索歌曲 / 专辑」：输入关键词点搜索，结果按专辑 / 歌曲分组显示；点专辑进入曲目，点歌曲直接播放。
+- 专辑与歌曲列表显示封面；选中专辑后显示专辑简介与艺人简介。
+- 播放页显示当前封面与逐行歌词，当前行随进度高亮；下方「播放队列 N 首」可点任意曲目跳转，结束时自动下一首。
+- 可选 CLI 验收：`cd ~/Projects/sonora_v2 && dart run tool/probe_navidrome_extras.dart --query=爱`。
+
 ## 5. 注意事项
 
 - adhoc 签名无法公证：网络下载的 app 首次打开需右键「打开」；首次联网需允许「本地网络」。

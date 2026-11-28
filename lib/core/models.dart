@@ -66,6 +66,7 @@ class PlaybackStatus {
 class PlayerInfo {
   final String id;
   final String name;
+
   /// 1 when the player is currently connected to LMS. Stale entries remain
   /// in `players_loop` after a probe/core exits, so the UI must filter on this.
   final bool connected;
@@ -80,11 +81,15 @@ class AlbumInfo {
   final String id;
   final String name;
   final String artist;
+
+  /// OpenSubsonic artistId, used by getArtistInfo2.
+  final String artistId;
   final String coverUrl;
   const AlbumInfo({
     required this.id,
     required this.name,
     this.artist = "",
+    this.artistId = "",
     this.coverUrl = "",
   });
 }
@@ -95,12 +100,16 @@ class SongInfo {
   final String artist;
   final String album;
   final int duration;
+
+  /// Authenticated getCoverArt URL; never contains the plain password.
+  final String coverUrl;
   const SongInfo({
     required this.id,
     required this.title,
     this.artist = "",
     this.album = "",
     this.duration = 0,
+    this.coverUrl = "",
   });
 }
 
@@ -121,6 +130,7 @@ int compareVersions(String a, String b) {
         .map((s) => int.tryParse(s) ?? 0)
         .toList();
   }
+
   final pa = parts(a);
   final pb = parts(b);
   final n = math.max(pa.length, pb.length);

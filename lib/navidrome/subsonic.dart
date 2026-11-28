@@ -19,7 +19,9 @@ class SubsonicAuth {
   /// Subsonic token = md5(password + salt). Password itself is never sent.
   String get token => md5.convert(utf8.encode(password + salt)).toString();
 
-  Map<String, String> query([Map<String, String> extra = const <String, String>{}]) {
+  Map<String, String> query([
+    Map<String, String> extra = const <String, String>{},
+  ]) {
     final q = <String, String>{
       "u": user,
       "t": token,
@@ -53,6 +55,27 @@ int _int(dynamic v) {
   return int.tryParse(v.toString()) ?? 0;
 }
 
+/// Authenticated cover-art URL. This endpoint returns binary image data,
+/// so the JSON-format flag must be removed just like /rest/stream.
+String coverArtUrl({
+  required String base,
+  required SubsonicAuth auth,
+  required String id,
+  int size = 300,
+}) {
+  final q = <String, String>{"id": id, "size": size.toString(), ...auth.query()}
+    ..remove("f");
+  return "$base/rest/getCoverArt?${Uri(queryParameters: q).query}";
+}
+
+String _coverUrl(String base, SubsonicAuth? auth, String id, [int size = 300]) {
+  if (id.isEmpty) return "";
+  if (auth != null) {
+    return coverArtUrl(base: base, auth: auth, id: id, size: size);
+  }
+  return "$base/rest/getCoverArt?id=$id&size=$size";
+}
+
 Map<String, dynamic> response(Map<String, dynamic> root) =>
     _asMap(root["subsonic-response"]) ?? <String, dynamic>{};
 
@@ -67,24 +90,30 @@ ServerInfo parsePing(Map<String, dynamic> root) {
   );
 }
 
-List<AlbumInfo> parseAlbumList(Map<String, dynamic> root, String base) {
+List<AlbumInfo> parseAlbumList(
+  Map<String, dynamic> root,
+  String base, {
+  SubsonicAuth? auth,
+}) {
   final r = response(root);
   final list = _asList(_asMap(r["albumList2"])?["album"]);
   return list.map((e) {
     final m = _asMap(e) ?? <String, dynamic>{};
-    final coverId = _str(m["coverArt"]);
     return AlbumInfo(
       id: _str(m["id"]),
       name: _str(m["name"]),
       artist: _str(m["artist"]),
-      coverUrl: coverId.isEmpty
-          ? ""
-          : "$base/rest/getCoverArt?id=$coverId&size=300",
+      artistId: _str(m["artistId"]),
+      coverUrl: _coverUrl(base, auth, _str(m["coverArt"])),
     );
   }).toList();
 }
 
-List<SongInfo> parseAlbum(Map<String, dynamic> root) {
+List<SongInfo> parseAlbum(
+  Map<String, dynamic> root, {
+  String base = "",
+  SubsonicAuth? auth,
+}) {
   final r = response(root);
   final list = _asList(_asMap(r["album"])?["song"]);
   return list.map((e) {
@@ -95,8 +124,62 @@ List<SongInfo> parseAlbum(Map<String, dynamic> root) {
       artist: _str(m["artist"]),
       album: _str(m["album"]),
       duration: _int(m["duration"]),
+      coverUrl: base.isEmpty
+          ? ""
+          : _coverUrl(base, auth, _str(m["coverArt"]), 300),
     );
   }).toList();
+}
+
+/// /rest/search3 result albums, same shape as albumList2.
+List<AlbumInfo> parseSearch3Albums(
+  Map<String, dynamic> root,
+  String base, {
+  SubsonicAuth? auth,
+}) {
+  final search = _asMap(response(root)["search3"]) ?? <String, dynamic>{};
+  return _asList(search["album"]).map((e) {
+    final m = _asMap(e) ?? <String, dynamic>{};
+    return AlbumInfo(
+      id: _str(m["id"]),
+      name: _str(m["name"]),
+      artist: _str(m["artist"]),
+      artistId: _str(m["artistId"]),
+      coverUrl: _coverUrl(base, auth, _str(m["coverArt"])),
+    );
+  }).toList();
+}
+
+/// /rest/search3 result songs.
+List<SongInfo> parseSearch3Songs(
+  Map<String, dynamic> root,
+  String base, {
+  SubsonicAuth? auth,
+}) {
+  final search = _asMap(response(root)["search3"]) ?? <String, dynamic>{};
+  return _asList(search["song"]).map((e) {
+    final m = _asMap(e) ?? <String, dynamic>{};
+    return SongInfo(
+      id: _str(m["id"]),
+      title: _str(m["title"]),
+      artist: _str(m["artist"]),
+      album: _str(m["album"]),
+      duration: _int(m["duration"]),
+      coverUrl: _coverUrl(base, auth, _str(m["coverArt"]), 300),
+    );
+  }).toList();
+}
+
+/// getAlbumInfo2 note / Last.fm style description.
+String parseAlbumNote(Map<String, dynamic> root) {
+  final info = _asMap(response(root)["albumInfo"]) ?? <String, dynamic>{};
+  return _str(info["note"]);
+}
+
+/// getArtistInfo2 biography.
+String parseArtistBio(Map<String, dynamic> root) {
+  final info = _asMap(response(root)["artistInfo2"]) ?? <String, dynamic>{};
+  return _str(info["biography"]);
 }
 
 List<LyricLine> parseStructuredLyrics(Map<String, dynamic> root) {
@@ -106,10 +189,7 @@ List<LyricLine> parseStructuredLyrics(Map<String, dynamic> root) {
   final first = _asMap(sets.first) ?? <String, dynamic>{};
   return _asList(first["line"]).map((e) {
     final m = _asMap(e) ?? <String, dynamic>{};
-    return LyricLine(
-      timeMs: _int(m["start"]),
-      text: _str(m["value"]),
-    );
+    return LyricLine(timeMs: _int(m["start"]), text: _str(m["value"]));
   }).toList();
 }
 

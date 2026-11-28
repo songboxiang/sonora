@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:io";
 
 import "package:flutter/material.dart";
+import "package:just_audio/just_audio.dart";
 
 import "core/models.dart";
 import "core/services.dart";
@@ -50,6 +51,10 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   final _navCreds = TextEditingController(
     text: "/Users/song/navidrome_creds.json",
   );
+  final _navSearch = TextEditingController();
+  List<LyricLine> _lyrics = <LyricLine>[];
+  String _albumNote = "";
+  String _artistBio = "";
 
   LmsTarget? _target;
   CoreRunner? _runner;
@@ -66,6 +71,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
   List<SongInfo> _songs = <SongInfo>[];
   NavidromeAudio? _audio;
   bool _audioSubscribed = false;
+  bool _autoAdvancing = false;
   String _source = "lms";
   SongInfo? _currentSong;
 
@@ -151,6 +157,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       _lmsCreds,
       _navHost,
       _navCreds,
+      _navSearch,
       _appZipUrl,
       _appSumsUrl,
     ]) {
@@ -606,6 +613,7 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       duration: duration ?? song?.duration ?? 0,
       position: position,
       volume: _volume,
+      artworkUrl: song?.coverUrl ?? "",
     );
   }
 
@@ -641,6 +649,17 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
           playing: s.playing,
         );
       });
+      if (s.processingState == ProcessingState.completed &&
+          !_autoAdvancing &&
+          _songs.isNotEmpty) {
+        _autoAdvancing = true;
+        _log("当前曲目结束，自动播放下一首");
+        unawaited(
+          _skipNavidrome(1).whenComplete(() {
+            _autoAdvancing = false;
+          }),
+        );
+      }
     });
   }
 
@@ -657,6 +676,9 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
     });
     _subscribeAudio();
     _log("Navidrome 播放：${song.title}");
+    final lines = await fetchNavidromeLyrics(target, song.id, onError: _log);
+    if (!mounted) return;
+    setState(() => _lyrics = lines);
     try {
       await _audio!.playSong(host: target.host, auth: target.auth, song: song);
       await _audio!.setVolume(_volume / 100.0);
@@ -839,9 +861,73 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
       album.id,
       onError: (m) => _log("专辑详情 $m"),
     );
+    final note = await fetchNavidromeAlbumNote(target, album.id, onError: _log);
+    final bio = await fetchNavidromeArtistBio(
+      target,
+      album.artistId,
+      onError: _log,
+    );
     if (!mounted) return;
-    setState(() => _songs = songs);
+    setState(() {
+      _songs = songs;
+      _albumNote = note;
+      _artistBio = bio;
+      _lyrics = const <LyricLine>[];
+    });
     _log("${album.name}：${songs.length} 首");
+  }
+
+  Future<void> _searchNavidrome() async {
+    final target = _navidromeTarget();
+    if (target == null) return;
+    final query = _navSearch.text.trim();
+    if (query.isEmpty) {
+      await _loadAlbums();
+      return;
+    }
+    if (mounted) setState(() => _busy = true);
+    final r = await searchNavidrome(target, query, onError: _log);
+    if (!mounted) return;
+    setState(() {
+      _albums = r.albums;
+      _songs = r.songs;
+      _albumNote = "";
+      _artistBio = "";
+      _lyrics = const <LyricLine>[];
+      _busy = false;
+    });
+    _log("搜索 '$query'：专辑 ${r.albums.length} / 歌曲 ${r.songs.length}");
+  }
+
+  int _currentLyricIndex() {
+    if (_lyrics.isEmpty) return -1;
+    final ms = _status.position * 1000;
+    var found = -1;
+    for (var i = 0; i < _lyrics.length; i++) {
+      if (_lyrics[i].timeMs <= ms) {
+        found = i;
+      } else {
+        break;
+      }
+    }
+    return found;
+  }
+
+  Widget _infoCard(String title, String body) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.all(8),
+      color: Colors.grey.shade200,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(body, style: const TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
   }
 
   Widget _field(
@@ -987,6 +1073,23 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   ),
                   Text(_status.artist.isEmpty ? "" : "艺人：${_status.artist}"),
                   Text(_status.album.isEmpty ? "" : "专辑：${_status.album}"),
+                  if (_source == "navidrome" &&
+                      _currentSong != null &&
+                      _currentSong!.coverUrl.isNotEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        _currentSong!.coverUrl,
+                        width: 140,
+                        height: 140,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const SizedBox(
+                          width: 140,
+                          height: 140,
+                          child: Icon(Icons.album),
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   Text(
                     "${formatDuration(_status.position)} / ${formatDuration(_status.duration)}",
@@ -1003,6 +1106,36 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                     onChanged: (_) {},
                     onChangeEnd: (v) => unawaited(_seek(v.round())),
                   ),
+                  if (_source == "navidrome" && _lyrics.isNotEmpty) ...<Widget>[
+                    const Text(
+                      "歌词",
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(
+                      height: 140,
+                      child: ListView.builder(
+                        itemCount: _lyrics.length,
+                        itemBuilder: (context, i) {
+                          final active = i == _currentLyricIndex();
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Text(
+                              _lyrics[i].text,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: active
+                                    ? Colors.indigo
+                                    : Colors.grey.shade700,
+                                fontWeight: active
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   Row(
                     children: <Widget>[
@@ -1025,6 +1158,31 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                       ),
                     ],
                   ),
+                  if (_source == "navidrome" && _songs.isNotEmpty) ...<Widget>[
+                    const Divider(),
+                    Text("播放队列 ${_songs.length} 首"),
+                    SizedBox(
+                      height: 150,
+                      child: ListView.builder(
+                        itemCount: _songs.length,
+                        itemBuilder: (context, i) {
+                          final song = _songs[i];
+                          final active = song.id == _currentSong?.id;
+                          return ListTile(
+                            dense: true,
+                            selected: active,
+                            leading: Text("${i + 1}"),
+                            title: Text(song.title),
+                            subtitle: Text(
+                              song.artist.isEmpty ? "未知艺人" : song.artist,
+                            ),
+                            trailing: Text(formatDuration(song.duration)),
+                            onTap: () => unawaited(_playNavidromeSong(song)),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                   const Divider(),
                   Text(
                     _source == "navidrome"
@@ -1048,6 +1206,19 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                 children: <Widget>[
                   _field("Navidrome 地址", _navHost),
                   _field("凭证路径", _navCreds),
+                  Row(
+                    children: <Widget>[
+                      Expanded(child: _field("搜索歌曲 / 专辑", _navSearch)),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: _busy
+                            ? null
+                            : () => unawaited(_searchNavidrome()),
+                        icon: const Icon(Icons.search),
+                        label: const Text("搜索"),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   ElevatedButton.icon(
                     onPressed: _busy ? null : () => unawaited(_loadAlbums()),
@@ -1056,8 +1227,15 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   ),
                   const Divider(),
                   Text("专辑 ${_albums.length} 张（入口以专辑为准）"),
+                  if (_albumNote.isNotEmpty) _infoCard("专辑简介", _albumNote),
+                  if (_artistBio.isNotEmpty) _infoCard("艺人简介", _artistBio),
                   ..._albums.map(
                     (a) => ListTile(
+                      leading: a.coverUrl.isEmpty
+                          ? null
+                          : CircleAvatar(
+                              backgroundImage: NetworkImage(a.coverUrl),
+                            ),
                       title: Text(a.name),
                       subtitle: Text(a.artist.isEmpty ? "未知艺人" : a.artist),
                       onTap: () => unawaited(_loadSongs(a)),
@@ -1067,6 +1245,11 @@ class _SonoraHomeState extends State<SonoraHome> with WidgetsBindingObserver {
                   Text("歌曲 ${_songs.length} 首"),
                   ..._songs.map(
                     (s) => ListTile(
+                      leading: s.coverUrl.isEmpty
+                          ? null
+                          : CircleAvatar(
+                              backgroundImage: NetworkImage(s.coverUrl),
+                            ),
                       title: Text(s.title),
                       subtitle: Text(
                         "${s.artist.isEmpty ? '未知艺人' : s.artist} · ${formatDuration(s.duration)}",
